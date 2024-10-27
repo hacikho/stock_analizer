@@ -4,6 +4,7 @@ from ta.momentum import RSIIndicator
 from ta.trend import PSARIndicator
 import warnings
 
+
 # Suppress FutureWarnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -174,5 +175,10 @@ if __name__ == "__main__":
     # Filter out only 'Buy' and 'Sell' signals
     buy_sell_df = df_signals[df_signals['Signal'].isin(['Buy', 'Sell'])]
 
-    # Display DataFrame with only Buy and Sell signals
-    print(buy_sell_df[['Stock', 'Signal']])
+    # Filter for Buy and Sell signals
+    buy_list = buy_sell_df[buy_sell_df['Signal'] == 'Buy']['Stock'].tolist()
+    sell_list = buy_sell_df[buy_sell_df['Signal'] == 'Sell']['Stock'].tolist()
+
+    # Print the lists
+    print("Buy List:", buy_list)
+    print("Sell List:", sell_list)
