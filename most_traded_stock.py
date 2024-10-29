@@ -1,154 +1,114 @@
 import yfinance as yf
 import pandas as pd
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 
+# Database connection and table setup
+def initialize_database():
+    conn = sqlite3.connect('stock_analysis.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS most_traded_stocks (
+            stock_ticker TEXT PRIMARY KEY,
+            total_volume INTEGER,
+            buy_volume INTEGER,
+            sell_volume INTEGER
+        )
+    ''')
+    conn.commit()
+    return conn, cursor
+
+def clear_table(cursor):
+    """
+    Clears the most_traded_stocks table to remove old data.
+    """
+    cursor.execute('DELETE FROM most_traded_stocks')
+
+def insert_stock_data(cursor, stock_ticker, total_volume, buy_volume, sell_volume):
+    """
+    Inserts stock data into the most_traded_stocks table.
+    """
+    cursor.execute('''
+        INSERT INTO most_traded_stocks (stock_ticker, total_volume, buy_volume, sell_volume)
+        VALUES (?, ?, ?, ?)
+    ''', (stock_ticker, total_volume, buy_volume, sell_volume))
 
 def get_sp500_tickers():
     """
-    Fetch the stock tickers for the S&P 500 index from Wikipedia.
-    
-    :return: List of S&P 500 stock tickers
+    Fetches the S&P 500 stock tickers.
     """
-    # Fetch S&P 500 stock tickers from Wikipedia
     url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
     table = pd.read_html(url)
-    
-    # The first table on the page contains the S&P 500 tickers
     sp500_df = table[0]
-    
-    # Get the 'Symbol' column which contains the tickers
-    sp500_tickers = sp500_df['Symbol'].tolist()
-    
-    return sp500_tickers
+    return sp500_df['Symbol'].tolist()
 
-def get_moving_averages(stock_symbol, period="1y"):
+def get_stock_data(stock_symbol):
     """
-    Fetch stock data and calculate moving averages.
-
-    :param stock_symbol: Stock ticker symbol (e.g., AAPL for Apple)
-    :param period: Period for historical data (default is 1 year)
-    :return: DataFrame with stock data and moving averages
+    Fetches 1-minute interval data for the past 24 hours, including pre- and post-market data.
     """
-    # Download stock data
-    stock_data = yf.download(stock_symbol, period=period)
-    
-    # Calculate 50-day and 200-day moving averages
-    stock_data['50_MA'] = stock_data['Close'].rolling(window=50).mean()
-    stock_data['200_MA'] = stock_data['Close'].rolling(window=200).mean()
-    
-    return stock_data
+    stock = yf.Ticker(stock_symbol)
+    data = stock.history(period="1d", interval="1m", prepost=True)
+    return data
 
-def is_stock_in_strong_uptrend(stock_data):
+def calculate_buy_sell_volume(data):
     """
-    Check if a stock is in a strong uptrend based on multiple criteria:
-    
-    - The 50-day moving average must be well above the 200-day moving average
-    - The stock's price must have risen significantly in the last 10 days
-    - The RSI must be in a moderate range (e.g., 30 < RSI < 70)
-    - The volume must show a surge compared to its 10-day average
-    
-    :param stock_data: DataFrame containing stock data with moving averages
-    :return: Boolean indicating whether the stock passes all strict uptrend criteria
+    Estimates buy and sell volumes based on intraday price movements.
     """
-    # Calculate the RSI (Relative Strength Index)
-    delta = stock_data['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rs = gain / loss
-    stock_data['RSI'] = 100 - (100 / (1 + rs))
-    
-    # Calculate 10-day price change percentage
-    stock_data['10_day_change'] = stock_data['Close'].pct_change(periods=10) * 100
-    
-    # Calculate the 10-day average volume
-    stock_data['Avg_Volume_10'] = stock_data['Volume'].rolling(window=10).mean()
-    
-    # Ensure the last day of data is available for calculations
-    if stock_data['50_MA'].isna().any() or stock_data['200_MA'].isna().any():
-        return False
+    buy_volume = data[data['Close'] > data['Open']]['Volume'].sum()
+    sell_volume = data[data['Close'] < data['Open']]['Volume'].sum()
+    total_volume = data['Volume'].sum()
 
-    # Criteria for a strong uptrend:
-    last_price = stock_data['Close'].iloc[-1]
-    last_50_ma = stock_data['50_MA'].iloc[-1]
-    last_200_ma = stock_data['200_MA'].iloc[-1]
-    last_rsi = stock_data['RSI'].iloc[-1]
-    last_10_day_change = stock_data['10_day_change'].iloc[-1]
-    last_avg_volume = stock_data['Avg_Volume_10'].iloc[-1]
-    current_volume = stock_data['Volume'].iloc[-1]
-    
-    # Criteria 1: 50-MA must be significantly higher than 200-MA
-    if not last_50_ma > last_200_ma * 1.05:
-        return False
-    
-    # Criteria 2: Price should have increased significantly in the last 10 days (e.g., > 5%)
-    if last_10_day_change < 2:
-        return False
-    
-    # # Criteria 3: RSI should be moderate (between 30 and 70)
-    # if not (30 < last_rsi < 70):
-    #     return False
-    
-    # Criteria 4: Current volume should be higher than the average volume (volume surge)
-    if current_volume < last_avg_volume * 1.2:
-        return False
+    buy_percentage = (buy_volume / total_volume) * 100 if total_volume else 0
+    sell_percentage = (sell_volume / total_volume) * 100 if total_volume else 0
 
-    return True
+    return buy_volume, sell_volume, buy_percentage, sell_percentage
 
-def find_uptrend_stocks(stock_symbols):
+def find_top_traded_stocks(tickers, top_n=10):
     """
-    Find stocks that are in a strong uptrend from a list of stock symbols.
-
-    :param stock_symbols: List of stock ticker symbols
-    :return: List of stocks that pass the strict uptrend criteria
+    Identifies the top N most traded stocks by total volume over the last 24 hours, including pre- and post-market.
     """
-    uptrend_stocks = []
+    total_volumes = {}
     
-    for symbol in stock_symbols:
+    def fetch_and_calculate_volume(ticker):
         try:
-            stock_data = get_moving_averages(symbol)
-            if is_stock_in_strong_uptrend(stock_data):
-                uptrend_stocks.append(symbol)
+            data = get_stock_data(ticker)
+            return ticker, data['Volume'].sum(), data
         except Exception as e:
-            print(f"Error processing {symbol}: {e}")
+            print(f"Error processing {ticker}: {e}")
+            return ticker, 0, None
+
+    with ThreadPoolExecutor() as executor:
+        results = executor.map(fetch_and_calculate_volume, tickers)
+
+    for ticker, total_volume, data in results:
+        if data is not None:
+            total_volumes[ticker] = (total_volume, data)
     
-    return uptrend_stocks
+    # Sort stocks by total volume and select the top N
+    sorted_stocks = sorted(total_volumes.items(), key=lambda x: x[1][0], reverse=True)[:top_n]
+    
+    # Create a list of top traded stocks with data
+    top_traded_stocks = [(ticker, data) for ticker, (_, data) in sorted_stocks]
+    
+    return top_traded_stocks
 
+# Main Execution
+conn, cursor = initialize_database()
+clear_table(cursor)  # Clear the table before inserting new data
 
-
-
-# List of stock tickers to track (you can update this list with more tickers)
-#tickers = ["AAPL", "MSFT", "TSLA", "AMZN", "GOOGL", "NVDA", "META"]
 tickers = get_sp500_tickers()
-# Dictionary to store volume data
-volume_data = {}
+top_traded_stocks = find_top_traded_stocks(tickers, top_n=10)
 
-# Fetch data for each ticker in the list
-for ticker in tickers:
-    stock = yf.Ticker(ticker)
-    # Get data for the last 24 hours (this fetches the last day's trading data)
-    hist = stock.history(period="1d")
-    
-    # Store the volume data (trading volume)
-    if not hist.empty:
-        volume_data[ticker] = hist["Volume"].iloc[0]
+# Insert the top 10 most traded stocks into the database
+for ticker, data in top_traded_stocks:
+    total_volume = data['Volume'].sum()
+    buy_volume, sell_volume, buy_percentage, sell_percentage = calculate_buy_sell_volume(data)
+    insert_stock_data(cursor, ticker, total_volume, buy_volume, sell_volume)
+    print(f"\nStock: {ticker}")
+    print(f"Total Volume: {total_volume} shares")
+    print(f"Buy Volume: {buy_volume} shares ({buy_percentage:.2f}%)")
+    print(f"Sell Volume: {sell_volume} shares ({sell_percentage:.2f}%)")
 
-# Convert the volume data to a DataFrame for easy sorting
-volume_df = pd.DataFrame(volume_data.items(), columns=["Ticker", "Volume"])
-
-# Sort the stocks by volume in descending order to find the most traded
-volume_df = volume_df.sort_values(by="Volume", ascending=False)
-
-# Display the most traded stock
-most_traded_stock = volume_df.iloc[0]
-print(f"Most traded stock in the last 24 hours: {most_traded_stock['Ticker']} with volume {most_traded_stock['Volume']}")
-
-# Show the entire DataFrame
-print(volume_df)
-print("testing build in trigger")
-
-
-# Find stocks in an uptrend
-uptrend_stocks = find_uptrend_stocks(tickers)
-
-print("Stocks in an uptrend:")
-for stock in uptrend_stocks:
-    print(stock)
+# Commit changes and close the connection
+conn.commit()
+conn.close()
