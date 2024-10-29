@@ -2,7 +2,7 @@ import sqlite3
 import yfinance as yf
 
 # Database connection
-db_path = '/home/ubuntu/stock_analysis.db'  # Replace with the absolute path to your SQLite database
+db_path = '/home/ubuntu/stock_analysis.db'  # Absolute path to your SQLite database
 conn = sqlite3.connect(db_path)
 cursor = conn.cursor()
 
@@ -16,6 +16,11 @@ def create_table():
             sell_volume INTEGER
         )
     ''')
+    conn.commit()
+
+def clear_table():
+    # Delete all existing records from the table before inserting new data
+    cursor.execute('DELETE FROM most_traded_stocks')
     conn.commit()
 
 def insert_stock_data(cursor, stock_ticker, total_volume, buy_volume, sell_volume):
@@ -52,6 +57,9 @@ def calculate_buy_sell_volume(data):
 # Ensure table exists
 create_table()
 
+# Clear table before inserting new data
+clear_table()
+
 # Main logic
 tickers = get_sp500_tickers()
 print("Tickers retrieved:", tickers)
@@ -64,7 +72,7 @@ for ticker, data in top_traded_stocks:
     buy_volume, sell_volume, buy_percentage, sell_percentage = calculate_buy_sell_volume(data)
     print(f"Inserting data for {ticker}: Total Volume={total_volume}, Buy Volume={buy_volume}, Sell Volume={sell_volume}")
     insert_stock_data(cursor, ticker, total_volume, buy_volume, sell_volume)
-    conn.commit()  # Commit after each insertion
 
-# Close the database connection
+# Commit all changes and close the database connection
+conn.commit()
 conn.close()
