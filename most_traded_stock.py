@@ -2,7 +2,7 @@ import sqlite3
 import yfinance as yf
 
 # Database connection
-db_path = '~/home/ubuntu/stock_analysis.db'  # Replace with the absolute path to your SQLite database
+db_path = '/home/ubuntu/stock_analysis.db'  # Replace with the absolute path to your SQLite database
 conn = sqlite3.connect(db_path)
 cursor = conn.cursor()
 
