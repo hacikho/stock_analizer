@@ -54,6 +54,11 @@ def find_top_traded_stocks(tickers, top_n=10):
     return top_traded[:top_n]
 
 def calculate_buy_sell_percentage(data):
+    # Check if 'Close' and 'Open' columns are in the data
+    if 'Close' not in data.columns or 'Open' not in data.columns:
+        print("Data does not contain 'Close' or 'Open' columns:", data.columns)
+        return 0.0, 0.0  # Return default percentages if data is incomplete
+
     total_volume = data['Volume'].sum()
     
     if total_volume > 0:
@@ -68,6 +73,7 @@ def calculate_buy_sell_percentage(data):
         buy_percentage, sell_percentage = 0.0, 0.0
     
     return buy_percentage, sell_percentage
+
 
 # Ensure table exists
 create_table()
