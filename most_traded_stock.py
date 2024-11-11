@@ -25,6 +25,9 @@ def clear_table():
 
 def insert_stock_data(cursor, stock_ticker, total_volume, buy_percentage, sell_percentage):
     try:
+        # Print debug information before insertion
+        print(f"Inserting data for {stock_ticker}: Total Volume={total_volume}, Buy Percentage={buy_percentage}%, Sell Percentage={sell_percentage}%")
+        
         cursor.execute('''
             INSERT INTO most_traded_stocks (stock_ticker, total_volume, buy_percentage, sell_percentage)
             VALUES (?, ?, ?, ?)
@@ -43,19 +46,27 @@ def find_top_traded_stocks(tickers, top_n=10):
     for ticker in tickers:
         stock_data = yf.Ticker(ticker).history(period="1d", interval="1m")
         if not stock_data.empty:
-            total_volume = stock_data['Volume'].sum()
-            if total_volume and total_volume > 0:  # Ensure volume data is valid
+            # Calculate total volume as an integer
+            total_volume = int(stock_data['Volume'].sum())
+            if total_volume > 0:  # Ensure volume data is valid
                 top_traded.append((ticker, {'Volume': stock_data['Volume']}))
     top_traded.sort(key=lambda x: x[1]['Volume'].sum(), reverse=True)
     return top_traded[:top_n]
 
 def calculate_buy_sell_percentage(data):
     total_volume = data['Volume'].sum()
+    
     if total_volume > 0:
-        buy_percentage = 60.0  # Placeholder for buy percentage (e.g., 60%)
-        sell_percentage = 40.0  # Placeholder for sell percentage (e.g., 40%)
+        # Determine buy and sell volume based on price movement
+        buy_volume = data[data['Close'] > data['Open']]['Volume'].sum()
+        sell_volume = data[data['Close'] <= data['Open']]['Volume'].sum()
+        
+        # Calculate percentages
+        buy_percentage = (buy_volume / total_volume) * 100
+        sell_percentage = (sell_volume / total_volume) * 100
     else:
         buy_percentage, sell_percentage = 0.0, 0.0
+    
     return buy_percentage, sell_percentage
 
 # Ensure table exists
@@ -72,10 +83,9 @@ top_traded_stocks = find_top_traded_stocks(tickers, top_n=10)
 print("Top traded stocks:", [ticker for ticker, _ in top_traded_stocks])
 
 for ticker, data in top_traded_stocks:
-    total_volume = data['Volume'].sum()
+    total_volume = int(data['Volume'].sum())
     buy_percentage, sell_percentage = calculate_buy_sell_percentage(data)
-    # Print debug information before insertion
-    print(f"Inserting data for {ticker}: Total Volume={total_volume}, Buy Percentage={buy_percentage}%, Sell Percentage={sell_percentage}%")
+    # Insert data with dynamic percentages
     insert_stock_data(cursor, ticker, total_volume, buy_percentage, sell_percentage)
 
 # Commit all changes and close the database connection
