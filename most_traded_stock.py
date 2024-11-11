@@ -49,7 +49,7 @@ def find_top_traded_stocks(tickers, top_n=10):
             # Calculate total volume as an integer
             total_volume = int(stock_data['Volume'].sum())
             if total_volume > 0:  # Ensure volume data is valid
-                top_traded.append((ticker, stock_data))
+                top_traded.append((ticker, stock_data))  # Append stock_data directly as a DataFrame
     top_traded.sort(key=lambda x: x[1]['Volume'].sum(), reverse=True)
     return top_traded[:top_n]
 
