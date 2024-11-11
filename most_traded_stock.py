@@ -49,7 +49,7 @@ def find_top_traded_stocks(tickers, top_n=10):
             # Calculate total volume as an integer
             total_volume = int(stock_data['Volume'].sum())
             if total_volume > 0:  # Ensure volume data is valid
-                top_traded.append((ticker, {'Volume': stock_data['Volume']}))
+                top_traded.append((ticker, stock_data))
     top_traded.sort(key=lambda x: x[1]['Volume'].sum(), reverse=True)
     return top_traded[:top_n]
 
@@ -73,7 +73,6 @@ def calculate_buy_sell_percentage(data):
         buy_percentage, sell_percentage = 0.0, 0.0
     
     return buy_percentage, sell_percentage
-
 
 # Ensure table exists
 create_table()
