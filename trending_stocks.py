@@ -4,6 +4,7 @@ import numpy as np
 import sqlite3
 from datetime import datetime, timedelta
 import time
+import re
 
 # Database connection setup
 db_path = '/home/ubuntu/stock_analysis.db'
