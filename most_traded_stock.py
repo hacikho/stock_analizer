@@ -1,5 +1,6 @@
 import sqlite3
 import yfinance as yf
+import pandas as pd
 
 # Database connection
 db_path = '/home/ubuntu/stock_analysis.db'  # Absolute path to your SQLite database
@@ -38,8 +39,13 @@ def insert_stock_data(cursor, stock_ticker, total_volume, buy_percentage, sell_p
         print(f"Error inserting data for {stock_ticker}: {e}")
 
 def get_sp500_tickers():
-    # Placeholder for actual list of S&P 500 tickers
-    return ['AAPL', 'MSFT', 'GOOGL', 'AMZN']  # Example tickers
+    # Fetch the S&P 500 table from Wikipedia
+    url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+    table = pd.read_html(url, header=0)
+    df = table[0]  # The first table on the page is the one we want
+    tickers = df['Symbol'].tolist()  # Extract the 'Symbol' column as a list
+    return tickers
+    #return ['AAPL', 'MSFT', 'GOOGL', 'AMZN']  # Example tickers
 
 def find_top_traded_stocks(tickers, top_n=10):
     top_traded = []
