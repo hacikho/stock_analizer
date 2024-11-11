@@ -47,7 +47,7 @@ def insert_trend_data(data, trend_type):
     analysis_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     for row in data.itertuples(index=False):
         cursor.execute('''
-            INSERT INTO stock_trends (ticker, beta, alpha, price_change, rsi, volatility, trend_type, analysis_date)
+            INSERT INTO trending_stocks (ticker, beta, alpha, price_change, rsi, volatility, trend_type, analysis_date)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (row.Ticker, row.Beta, row.Alpha, row._4, row.RSI, row.Volatility, trend_type, analysis_date))
     conn.commit()
@@ -57,7 +57,7 @@ def insert_trend_data(data, trend_type):
 def clear_old_data(trend_type):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-    cursor.execute('DELETE FROM stock_trends WHERE trend_type = ?', (trend_type,))
+    cursor.execute('DELETE FROM trending_stocks WHERE trend_type = ?', (trend_type,))
     conn.commit()
     conn.close()
 
