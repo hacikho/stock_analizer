@@ -47,11 +47,21 @@ def insert_trend_data(data, trend_type):
     analysis_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     for row in data.itertuples(index=False):
         cursor.execute('''
-            INSERT INTO trending_stocks (ticker, beta, alpha, price_change, rsi, volatility, trend_type, analysis_date)
+            INSERT INTO stock_trends (ticker, beta, alpha, price_change, rsi, volatility, trend_type, analysis_date)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (row.Ticker, row.Beta, row.Alpha, row._4, row.RSI, row.Volatility, trend_type, analysis_date))
+        ''', (
+            row.Ticker,            # ticker
+            row.Beta,              # beta
+            row.Alpha,             # alpha
+            row[3],                # price_change (using positional index instead of row._4)
+            row.RSI,               # rsi
+            row.Volatility,        # volatility
+            trend_type,            # trend_type
+            analysis_date          # analysis_date
+        ))
     conn.commit()
     conn.close()
+
 
 # Clear existing data for a specific trend type
 def clear_old_data(trend_type):
