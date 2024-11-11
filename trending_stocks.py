@@ -28,6 +28,17 @@ def setup_database():
     conn.commit()
     conn.close()
 
+# Known unsupported symbols
+unsupported_symbols = ["BRK.B", "BF.B"]
+
+# Fetch S&P 500 stock list
+def get_sp500_tickers():
+    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+    sp500_table = pd.read_html(url, header=0)[0]
+    symbols = sp500_table['Symbol'].tolist()
+    symbols = [symbol.replace(".", "-") for symbol in symbols if re.match(r'^[A-Za-z0-9]+$', symbol) and symbol not in unsupported_symbols]
+    return symbols
+
 # Insert trend data into the database
 def insert_trend_data(data, trend_type):
     conn = sqlite3.connect(db_path)
@@ -156,6 +167,9 @@ def analyze_trends(period_days, trend_type):
 
 # Setup the database and create tables if necessary
 setup_database()
+
+# Retrieve the S&P 500 tickers
+sp500_tickers = get_sp500_tickers()
 
 # Run analyses for both 365 days and 90 days
 top_uptrend_365, top_downtrend_365 = analyze_trends(365, '365_days')
