@@ -54,6 +54,49 @@ def get_latest_stock_data(symbol):
             print(f"Error fetching data for {symbol} (period={period}): {e}")
     return None
 
+# Calculate Bollinger Bands
+def bollinger_bands(data, window=20, no_of_std=2):
+    rolling_mean = data['Close'].rolling(window).mean()
+    rolling_std = data['Close'].rolling(window).std()
+    data['Bollinger Upper'] = rolling_mean + (rolling_std * no_of_std)
+    data['Bollinger Lower'] = rolling_mean - (rolling_std * no_of_std)
+    data['Rolling Mean'] = rolling_mean
+    return data
+
+# Calculate RSI
+def calculate_rsi(data, window=14):
+    rsi = RSIIndicator(data['Close'], window=window)
+    data['RSI'] = rsi.rsi()
+    return data
+
+# Calculate Moving Averages
+def calculate_moving_average(data, windows=[50, 100, 200]):
+    for window in windows:
+        data[f'Moving Average {window}'] = data['Close'].rolling(window=window).mean()
+    return data
+
+# Calculate MACD and Signal Line
+def calculate_macd(data, fast_period=12, slow_period=26, signal_period=9):
+    data['EMA_12'] = data['Close'].ewm(span=fast_period, adjust=False).mean()
+    data['EMA_26'] = data['Close'].ewm(span=slow_period, adjust=False).mean()
+    data['MACD'] = data['EMA_12'] - data['EMA_26']
+    data['Signal Line'] = data['MACD'].ewm(span=signal_period, adjust=False).mean()
+    return data
+
+# Calculate Stochastic Oscillator
+def calculate_stochastic(data, k_period=14, d_period=3):
+    data['Low_14'] = data['Low'].rolling(window=k_period).min()
+    data['High_14'] = data['High'].rolling(window=k_period).max()
+    data['%K'] = 100 * ((data['Close'] - data['Low_14']) / (data['High_14'] - data['Low_14']))
+    data['%D'] = data['%K'].rolling(window=d_period).mean()
+    return data
+
+# Calculate Parabolic SAR
+def calculate_parabolic_sar(data):
+    psar_indicator = PSARIndicator(data['High'], data['Low'], data['Close'], step=0.02, max_step=0.2)
+    data['PSAR'] = psar_indicator.psar()
+    return data
+
 # Buy/Sell Signal Strategy
 def signal_strategy(data):
     proximity_percentage = min(0.02, data['Close'].pct_change().rolling(window=10).std().iloc[-1] * 1.5)
@@ -119,7 +162,6 @@ if __name__ == "__main__":
     delete_old_data()
 
     sp500_symbols = get_sp500_stocks()
-    stock_signal_data = []
 
     for symbol in sp500_symbols:
         try:
@@ -127,7 +169,7 @@ if __name__ == "__main__":
             if stock_data is None or len(stock_data) < 50:
                 continue
 
-            # Calculate indicators and signals (rest of calculations remain the same as before)
+            # Calculate indicators
             stock_data = bollinger_bands(stock_data)
             stock_data = calculate_rsi(stock_data)
             stock_data = calculate_moving_average(stock_data)
