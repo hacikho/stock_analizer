@@ -47,7 +47,7 @@ def insert_trend_data(data, trend_type):
     analysis_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     for row in data.itertuples(index=False):
         cursor.execute('''
-            INSERT INTO stock_trends (ticker, beta, alpha, price_change, rsi, volatility, trend_type, analysis_date)
+            INSERT INTO trending_stocks (ticker, beta, alpha, price_change, rsi, volatility, trend_type, analysis_date)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             row.Ticker,            # ticker
