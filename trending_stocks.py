@@ -1,11 +1,53 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import sqlite3
 from datetime import datetime, timedelta
 import time
 
-# Retrieve the list of S&P 500 tickers
-sp500_tickers = pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')[0]['Symbol'].tolist()
+# Database connection setup
+db_path = '/home/ubuntu/stock_analysis.db'
+
+# Connect to the database and create the table if it doesn't exist
+def setup_database():
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS trending_stocks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT,
+            beta REAL,
+            alpha REAL,
+            price_change REAL,
+            rsi REAL,
+            volatility REAL,
+            trend_type TEXT,
+            analysis_date TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+# Insert trend data into the database
+def insert_trend_data(data, trend_type):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    analysis_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for row in data.itertuples(index=False):
+        cursor.execute('''
+            INSERT INTO stock_trends (ticker, beta, alpha, price_change, rsi, volatility, trend_type, analysis_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (row.Ticker, row.Beta, row.Alpha, row._4, row.RSI, row.Volatility, trend_type, analysis_date))
+    conn.commit()
+    conn.close()
+
+# Clear existing data for a specific trend type
+def clear_old_data(trend_type):
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM stock_trends WHERE trend_type = ?', (trend_type,))
+    conn.commit()
+    conn.close()
 
 # Define indicators and calculations for stock trends
 def calculate_beta_alpha(stock_returns, market_returns):
@@ -40,7 +82,7 @@ def download_stock_data(ticker, start, end, retries=3, delay=5):
     return None
 
 # Main analysis function for a given period
-def analyze_trends(period_days):
+def analyze_trends(period_days, trend_type):
     end_date = datetime.today()
     start_date = end_date - timedelta(days=period_days)
     failed_tickers = []
@@ -95,24 +137,29 @@ def analyze_trends(period_days):
             'Volatility': aligned_data['Volatility'].iloc[-1]
         })
 
-    # Convert results to DataFrame and sort
+    # Convert results to DataFrame
     trending_df = pd.DataFrame(trending_stocks)
     if not trending_df.empty:
         trending_df = trending_df.sort_values(by="Price Change (%)", ascending=False).reset_index(drop=True)
         top_uptrend = trending_df.head(10)
         top_downtrend = trending_df.tail(10).sort_values(by="Price Change (%)").reset_index(drop=True)
+        clear_old_data(trend_type)  # Clear old data for this trend type
+        insert_trend_data(top_uptrend, f"{trend_type}_uptrend")
+        insert_trend_data(top_downtrend, f"{trend_type}_downtrend")
     else:
         top_uptrend, top_downtrend = None, None
 
-    # Display failed tickers
     if failed_tickers:
         print(f"Failed to process data for the following tickers: {failed_tickers}")
 
     return top_uptrend, top_downtrend
 
-# Run analyses for 365 days and 90 days
-top_uptrend_365, top_downtrend_365 = analyze_trends(365)
-top_uptrend_90, top_downtrend_90 = analyze_trends(90)
+# Setup the database and create tables if necessary
+setup_database()
+
+# Run analyses for both 365 days and 90 days
+top_uptrend_365, top_downtrend_365 = analyze_trends(365, '365_days')
+top_uptrend_90, top_downtrend_90 = analyze_trends(90, '90_days')
 
 # Display results
 if top_uptrend_365 is not None and top_downtrend_365 is not None:
