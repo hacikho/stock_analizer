@@ -12,8 +12,8 @@ def create_table():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             stock_ticker TEXT,
             total_volume INTEGER,
-            buy_volume INTEGER,
-            sell_volume INTEGER
+            buy_percentage REAL,
+            sell_percentage REAL
         )
     ''')
     conn.commit()
@@ -23,19 +23,19 @@ def clear_table():
     cursor.execute('DELETE FROM most_traded_stocks')
     conn.commit()
 
-def insert_stock_data(cursor, stock_ticker, total_volume, buy_volume, sell_volume):
+def insert_stock_data(cursor, stock_ticker, total_volume, buy_percentage, sell_percentage):
     try:
         cursor.execute('''
-            INSERT INTO most_traded_stocks (stock_ticker, total_volume, buy_volume, sell_volume)
+            INSERT INTO most_traded_stocks (stock_ticker, total_volume, buy_percentage, sell_percentage)
             VALUES (?, ?, ?, ?)
-        ''', (stock_ticker, total_volume, buy_volume, sell_volume))
+        ''', (stock_ticker, total_volume, buy_percentage, sell_percentage))
     except sqlite3.IntegrityError as e:
         print(f"Integrity Error for {stock_ticker}: {e}")
     except Exception as e:
         print(f"Error inserting data for {stock_ticker}: {e}")
 
 def get_sp500_tickers():
-    # This is a placeholder; implement actual method to get tickers
+    # Placeholder for actual list of S&P 500 tickers
     return ['AAPL', 'MSFT', 'GOOGL', 'AMZN']  # Example tickers
 
 def find_top_traded_stocks(tickers, top_n=10):
@@ -44,15 +44,19 @@ def find_top_traded_stocks(tickers, top_n=10):
         stock_data = yf.Ticker(ticker).history(period="1d", interval="1m")
         if not stock_data.empty:
             total_volume = stock_data['Volume'].sum()
-            top_traded.append((ticker, {'Volume': stock_data['Volume']}))
+            if total_volume and total_volume > 0:  # Ensure volume data is valid
+                top_traded.append((ticker, {'Volume': stock_data['Volume']}))
     top_traded.sort(key=lambda x: x[1]['Volume'].sum(), reverse=True)
     return top_traded[:top_n]
 
-def calculate_buy_sell_volume(data):
+def calculate_buy_sell_percentage(data):
     total_volume = data['Volume'].sum()
-    buy_volume = int(total_volume * 0.6)  # Placeholder calculation
-    sell_volume = int(total_volume * 0.4)  # Placeholder calculation
-    return buy_volume, sell_volume, 60, 40
+    if total_volume > 0:
+        buy_percentage = 60.0  # Placeholder for buy percentage (e.g., 60%)
+        sell_percentage = 40.0  # Placeholder for sell percentage (e.g., 40%)
+    else:
+        buy_percentage, sell_percentage = 0.0, 0.0
+    return buy_percentage, sell_percentage
 
 # Ensure table exists
 create_table()
@@ -69,9 +73,10 @@ print("Top traded stocks:", [ticker for ticker, _ in top_traded_stocks])
 
 for ticker, data in top_traded_stocks:
     total_volume = data['Volume'].sum()
-    buy_volume, sell_volume, buy_percentage, sell_percentage = calculate_buy_sell_volume(data)
-    print(f"Inserting data for {ticker}: Total Volume={total_volume}, Buy Volume={buy_volume}, Sell Volume={sell_volume}")
-    insert_stock_data(cursor, ticker, total_volume, buy_volume, sell_volume)
+    buy_percentage, sell_percentage = calculate_buy_sell_percentage(data)
+    # Print debug information before insertion
+    print(f"Inserting data for {ticker}: Total Volume={total_volume}, Buy Percentage={buy_percentage}%, Sell Percentage={sell_percentage}%")
+    insert_stock_data(cursor, ticker, total_volume, buy_percentage, sell_percentage)
 
 # Commit all changes and close the database connection
 conn.commit()
