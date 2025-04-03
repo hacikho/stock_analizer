@@ -1,15 +1,14 @@
-stage2.py
 import yfinance as yf
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 
 def get_sp500_tickers():
-    url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-    resp = requests.get(url)
-    soup = BeautifulSoup(resp.text, "html.parser")
-    table = soup.find("table", {"id": "constituents"})
-    tickers = [row.findAll("td")[0].text.strip() for row in table.findAll("tr")[1:]]
+    # Fetch the S&P 500 table from Wikipedia
+    url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+    table = pd.read_html(url, header=0)
+    df = table[0]  # The first table on the page is the one we want
+    tickers = df['Symbol'].tolist()  # Extract the 'Symbol' column as a list
     return tickers
 
 def get_nasdaq_tickers():
@@ -116,7 +115,8 @@ def check_trend_template(ticker):
 
 
 # Get tickers from indices
-tickers = set(get_sp500_tickers() + get_nasdaq_tickers() + get_dow_tickers() + get_russell_2000_tickers())
+#tickers = set(get_sp500_tickers() + get_nasdaq_tickers() + get_dow_tickers() + get_russell_2000_tickers())
+tickers = get_sp500_tickers()
 
 # Filter stocks meeting criteria
 qualified_stocks = [ticker for ticker in tickers if check_trend_template(ticker)]
