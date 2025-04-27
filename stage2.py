@@ -5,8 +5,6 @@ import os
 
 load_dotenv()  # Load environment variables from .env
 API_KEY = os.getenv('API_KEY')
-# Replace with your Polygon.io API key
-#API_KEY = 'xoy7F3YlO_X9gNBAOyhpV5BEYvdwwpEz'
 
 # Fetch the list of S&P 500 tickers (same as before)
 def get_sp500_tickers():
