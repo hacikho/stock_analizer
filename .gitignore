@@ -1,2 +1,11 @@
-myvenv
-.env
+# Virtual environments
+.venv/
+env/
+venv/
+
+# Bytecode and caches
+__pycache__/
+*.py[cod]
+
+# Poetry cache/config (optional)
+.poetry/
