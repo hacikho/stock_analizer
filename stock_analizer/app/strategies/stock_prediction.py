@@ -102,7 +102,7 @@ def prophet_forecast_end_of_current_quarter(data, quarter_end_date):
 
 # Main function
 def main():
-    ticker = "GOOG"  # Example ticker for S&P 500 stock
+    ticker = "NVDA"  # NVIDIA ticker for earnings prediction
     data = download_stock_data(ticker)
 
     # Determine end of the current quarter
