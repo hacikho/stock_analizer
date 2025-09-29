@@ -2,11 +2,49 @@
 .venv/
 env/
 venv/
+
+# Environment files (enhanced security)
 .env
+.env.local
+.env.*.local
+*.env
+.env.production
+.env.development
 
 # Bytecode and caches
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
+
+# Database files
+*.db
+*.sqlite3
+data.db
+
+# Logs
+*.log
+logs/
+
+# IDE files
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
 
 # Poetry cache/config (optional)
 .poetry/
+
+# API keys and secrets
+secrets.json
+config.json
+keys.txt
+
+# Model files (if you save ML models)
+*.h5
+*.pkl
+*.joblib
