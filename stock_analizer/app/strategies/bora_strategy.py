@@ -8,8 +8,8 @@ from app.services.sp500 import get_sp500_tickers
 
 
 """
-Bora Strategy: Risk-Managed Trend-Following Stock Screener
-----------------------------------------------------------
+Bora Strategy: Risk-Managed Trend-Following Stock Screener with Entry Timing
+----------------------------------------------------------------------------
 This module implements a trend-following stock screening strategy based on the following rules:
 
 TREND FILTERS:
@@ -17,17 +17,22 @@ TREND FILTERS:
 2. The 21-day exponential moving average (EMA_21) must be above the 50-day EMA (EMA_50).
 3. The EMA_21 must be trending up, as measured by slope, percent change, or strict monotonicity over a lookback window.
 
-VOLUME & CONVICTION FILTERS:
-4. Recent volume must be above the 20-day average volume (conviction behind moves).
-5. On-Balance Volume (OBV) must be trending up (smart money accumulation).
-6. Volume surge confirmation on recent green days (institutional interest).
-7. Accumulation/Distribution Line must be positive (buying pressure > selling pressure).
-
 VOLATILITY & RISK MANAGEMENT FILTERS:
-8. ATR-based filters: Avoid overly volatile stocks (ATR < X% of price).
-9. Bollinger Band position: Price in upper half but not touching upper band.
-10. Beta filter: Moderate beta (0.8-1.5) - responsive but not crazy volatile.
-11. Maximum correlation with VIX: Low correlation with fear index.
+4. ATR-based filters: Avoid overly volatile stocks (ATR < X% of price).
+5. Bollinger Band position: Price in upper half but not touching upper band.
+6. Beta filter: Moderate beta (0.8-1.5) - responsive but not crazy volatile.
+7. Maximum correlation with VIX: Low correlation with fear index.
+
+VOLUME & CONVICTION FILTERS:
+8. Recent volume must be above the 20-day average volume (conviction behind moves).
+9. On-Balance Volume (OBV) must be trending up (smart money accumulation).
+10. Volume surge confirmation on recent green days (institutional interest).
+11. Accumulation/Distribution Line must be positive (buying pressure > selling pressure).
+
+ENTRY TIMING ENHANCEMENTS:
+12. Pullback opportunity: Recently pulled back to EMA_21 and bounced.
+13. Consolidation breakout: Breaking out of a consolidation pattern.
+14. Gap-up confirmation: Recent gap-ups followed by continuation.
 
 The strategy can be run as a standalone script (for scheduled jobs) or imported as a module.
 Results are stored in the BoraData table in the database for later retrieval via API.
@@ -41,7 +46,7 @@ from app.services.polygon import get_polygon_data
 
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Add technical indicators including moving averages, volume, and volatility indicators.
+    Add technical indicators including moving averages, volume, volatility, and timing indicators.
     Args:
         df: DataFrame with 'close' and 'volume' columns.
     Returns:
@@ -53,6 +58,23 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["SMA_200"] = df["close"].rolling(window=200).mean()
     df["EMA_21"]  = df["close"].ewm(span=21, adjust=False).mean()
     df["EMA_50"]  = df["close"].ewm(span=50, adjust=False).mean()
+    
+    # Entry timing indicators
+    # Distance from EMA_21 (for pullback detection)
+    df["Distance_EMA21"] = ((df["close"] - df["EMA_21"]) / df["EMA_21"]) * 100
+    
+    # Consolidation detection - range compression
+    df["High_10"] = df["close"].rolling(window=10).max()
+    df["Low_10"] = df["close"].rolling(window=10).min()
+    df["Range_10"] = df["High_10"] - df["Low_10"]
+    df["Range_Pct_10"] = (df["Range_10"] / df["Low_10"]) * 100
+    
+    # Gap detection (if we have OHLC data)
+    if "open" in df.columns:
+        df["Gap"] = ((df["open"] - df["close"].shift(1)) / df["close"].shift(1)) * 100
+    else:
+        # Simulate gap using close prices
+        df["Gap"] = ((df["close"] - df["close"].shift(1)) / df["close"].shift(1)) * 100
     
     # Volatility indicators
     # ATR (Average True Range)
@@ -218,6 +240,82 @@ def volatility_risk_ok(df: pd.DataFrame, max_atr_pct=5.0, min_beta=0.8, max_beta
         print(f"   ⚠️  Volatility check failed: {str(e)}")
         return False
 
+def entry_timing_ok(df: pd.DataFrame, lookback=10) -> bool:
+    """
+    Check if entry timing indicators suggest a good entry opportunity.
+    Args:
+        df: DataFrame with timing indicators.
+        lookback: Number of days to check for patterns.
+    Returns:
+        True if entry timing criteria are met, False otherwise.
+    """
+    try:
+        current_price = df["close"].iloc[-1]
+        
+        # 1. Pullback opportunity: Recently pulled back to EMA_21 and bounced
+        if "Distance_EMA21" in df.columns and "EMA_21" in df.columns:
+            recent_distances = df["Distance_EMA21"].iloc[-lookback:]
+            current_distance = df["Distance_EMA21"].iloc[-1]
+            
+            if not pd.isna(current_distance):
+                # Check if we recently touched/got close to EMA_21 (within 2%) and bounced back
+                min_distance_recent = recent_distances.min()
+                if min_distance_recent <= 2.0 and current_distance > min_distance_recent:
+                    # Found a pullback and bounce pattern
+                    pass
+                else:
+                    # Also accept if currently close to EMA_21 but trending up
+                    if current_distance > 5.0:  # Too far from EMA_21
+                        return False
+        
+        # 2. Consolidation breakout: Breaking out of a consolidation pattern
+        if "Range_Pct_10" in df.columns and "High_10" in df.columns:
+            recent_ranges = df["Range_Pct_10"].iloc[-lookback:]
+            current_high_10 = df["High_10"].iloc[-2]  # Previous day's 10-day high
+            
+            if not pd.isna(current_high_10) and len(recent_ranges) >= 5:
+                # Check for recent consolidation (low volatility)
+                avg_range = recent_ranges.mean()
+                if not pd.isna(avg_range) and avg_range < 8.0:  # Relatively tight range
+                    # Check if breaking out above recent high
+                    if current_price > current_high_10:
+                        # Breakout confirmed
+                        pass
+                    # Also accept if very close to breakout
+                    elif current_price > (current_high_10 * 0.995):
+                        pass
+                    else:
+                        return False
+        
+        # 3. Gap-up confirmation: Recent gap-ups followed by continuation
+        if "Gap" in df.columns:
+            recent_gaps = df["Gap"].iloc[-5:]  # Last 5 days
+            recent_prices = df["close"].iloc[-5:]
+            
+            if len(recent_gaps) >= 3:
+                # Look for recent gap up (> 1%) followed by continuation
+                gap_up_days = recent_gaps[recent_gaps > 1.0]
+                
+                if len(gap_up_days) > 0:
+                    # Find the most recent gap up
+                    gap_day_idx = recent_gaps[recent_gaps > 1.0].index[-1]
+                    gap_day_pos = list(recent_gaps.index).index(gap_day_idx)
+                    
+                    # Check if price continued higher after gap
+                    if gap_day_pos < len(recent_prices) - 1:
+                        price_after_gap = recent_prices.iloc[gap_day_pos + 1:]
+                        if len(price_after_gap) > 0:
+                            gap_price = recent_prices.iloc[gap_day_pos]
+                            continuation = price_after_gap.iloc[-1] >= gap_price
+                            if not continuation:
+                                return False
+        
+        return True
+        
+    except Exception as e:
+        print(f"   ⚠️  Entry timing check failed: {str(e)}")
+        return False
+
 def ema21_trend_ok(df: pd.DataFrame, lookback=10, method="slope", slope_thresh=0.0, pct_thresh=1.0) -> bool:
     """
     Check if the EMA_21 is trending up over the lookback window.
@@ -282,12 +380,16 @@ async def scan_single_symbol(sym, session, method, slope_thresh, pct_thresh, loo
     if not volatility_risk_ok(df):
         return None
     
+    # Entry Timing Enhancement Filters (mandatory)
+    if not entry_timing_ok(df, lookback=lookback):
+        return None
+    
     # Volume & Conviction Filters (optional - only if volume data available)
     has_volume_data = "volume" in df.columns and not df["volume"].isna().all()
     if has_volume_data:
         if not volume_conviction_ok(df, lookback=lookback):
             return None
-    # If no volume data, we still proceed with trend+volatility analysis
+    # If no volume data, we still proceed with trend+volatility+timing analysis
 
     return sym
 
@@ -345,7 +447,8 @@ async def run_and_store_bora():
         print(f"   • Lookback Period: {lookback} days")
         print(f"   • Volume Filters: Above avg volume, OBV trend, A/D Line")
         print(f"   • Risk Filters: ATR, Bollinger Bands, Beta proxy, Volatility stability")
-        print("🔍 Running risk-managed screening analysis...")
+        print(f"   • Timing Filters: Pullback bounce, Consolidation breakout, Gap continuation")
+        print("🔍 Running comprehensive screening with optimal entry timing...")
         
         picks = await scan_symbols(tickers, ema21_method=ema21_method, slope_thresh=slope_thresh, pct_thresh=pct_thresh, lookback=lookback)
         
