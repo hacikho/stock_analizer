@@ -137,17 +137,43 @@ async def run_and_store_bora():
 async def run_and_store_bora():
     session = SessionLocal()
     try:
+        print("🚀 Starting Bora Strategy Scan...")
+        print("📈 Fetching S&P 500 tickers...")
         tickers = await get_sp500_tickers()
+        print(f"📊 Found {len(tickers)} S&P 500 tickers to analyze")
+        
         # Set default parameters for scan_symbols
         ema21_method = "slope"
         slope_thresh = 0.0
         pct_thresh = 1.0
         lookback = 10
+        
+        print(f"⚙️  Scan Parameters:")
+        print(f"   • EMA21 Method: {ema21_method}")
+        print(f"   • Slope Threshold: {slope_thresh}")
+        print(f"   • Percent Threshold: {pct_thresh}%")
+        print(f"   • Lookback Period: {lookback} days")
+        print("🔍 Running screening analysis...")
+        
         picks = await scan_symbols(tickers, ema21_method=ema21_method, slope_thresh=slope_thresh, pct_thresh=pct_thresh, lookback=lookback)
+        
+        print(f"\n✅ Screening Complete! Found {len(picks)} qualifying stocks:")
+        if picks:
+            print("🏆 BORA Strategy Winners:")
+            for i, sym in enumerate(picks, 1):
+                print(f"   {i:2d}. {sym}")
+        else:
+            print("   No stocks met the criteria today")
+        
         now = datetime.datetime.now()
         today = now.date()
         time_now = now.time().replace(microsecond=0)
-        for sym in picks:
+        
+        print(f"\n💾 Saving results to database...")
+        print(f"📅 Date: {today}")
+        print(f"🕒 Time: {time_now}")
+        
+        for i, sym in enumerate(picks, 1):
             entry = BoraData(
                 symbol=sym,
                 data_date=today,
@@ -155,10 +181,14 @@ async def run_and_store_bora():
                 data_json=json.dumps({"Ticker": sym}),
             )
             session.add(entry)
+            print(f"   💾 Added {sym} to database ({i}/{len(picks)})")
+        
         session.commit()
-        print(f"Inserted {len(picks)} BORA results into DB for {today} {time_now}")
+        print(f"\n🎉 SUCCESS: Inserted {len(picks)} BORA results into DB for {today} {time_now}")
+        
     except Exception as e:
-        print(f"Error in run_and_store_bora: {e}")
+        print(f"❌ Error in run_and_store_bora: {e}")
+        session.rollback()
     finally:
         session.close()
 
