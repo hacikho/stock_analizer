@@ -518,39 +518,138 @@ def get_ticker_data(symbol: str, days: int = Query(default=30, ge=1, le=730)):
 @router.post("/strategies/run_all", tags=["Strategies"])
 async def run_all_strategies():
     """
-    Manually trigger ALL strategy tasks.
+    Manually trigger ALL strategies directly in the API process.
     Requires market_data table to be populated first (POST /market_data/fetch).
     Each strategy reads from DB and writes results to its own table.
+    
+    Note: Runs in-process (not via Celery) so results are in the same SQLite DB.
+    This may take several minutes to complete.
     """
     import traceback
+    import asyncio
     results = {}
     
-    strategies = [
-        ("canslim", "aignitequant.tasks.run_canslim"),
-        ("bora", "aignitequant.tasks.run_bora_strategy"),
-        ("golden_cross", "aignitequant.tasks.run_golden_cross"),
-        ("stage2", "aignitequant.tasks.run_stage2"),
-        ("vcp", "aignitequant.tasks.run_vcp_scanner"),
-        ("felix", "aignitequant.tasks.run_felix_strategy"),
-        ("vibia_hybrid", "aignitequant.tasks.run_vibia_hybrid"),
-        ("marios_swing", "aignitequant.tasks.run_marios_swing"),
-        ("follow_the_money", "aignitequant.tasks.run_follow_the_money"),
-        ("earnings_quality", "aignitequant.tasks.run_earnings_quality"),
-        ("options", "aignitequant.tasks.run_option_strategies"),
-    ]
+    # --- CANSLIM ---
+    try:
+        from aignitequant.app.strategies.canslim_strategy import canslim_screen
+        r = canslim_screen()
+        results["canslim"] = f"OK - {len(r)} candidates"
+    except Exception as e:
+        results["canslim"] = f"error: {e}"
     
-    from aignitequant.tasks.celery_app import app as celery_app
+    # --- BORA ---
+    try:
+        from aignitequant.app.strategies.bora_strategy import scan_symbols
+        r = scan_symbols()
+        results["bora"] = f"OK - {len(r)} signals"
+    except Exception as e:
+        results["bora"] = f"error: {e}"
     
-    for name, task_name in strategies:
-        try:
-            task = celery_app.send_task(task_name)
-            results[name] = f"dispatched (task_id={task.id})"
-        except Exception as e:
-            results[name] = f"error: {e}"
+    # --- Golden Cross ---
+    try:
+        from aignitequant.app.strategies.golden_cross_strategy import golden_cross_strategy
+        r = golden_cross_strategy()
+        results["golden_cross"] = f"OK - {len(r)} signals"
+    except Exception as e:
+        results["golden_cross"] = f"error: {e}"
+    
+    # --- Stage 2 ---
+    try:
+        from aignitequant.app.strategies.stage2 import check_trend_template, get_spy_data
+        from aignitequant.app.services.sp500 import get_sp500_tickers
+        import json as _json
+        
+        tickers = await get_sp500_tickers()
+        import aiohttp as _aiohttp
+        async with _aiohttp.ClientSession() as _session:
+            spy_data = await get_spy_data(_session)
+        
+        qualified = []
+        now_dt = __import__('datetime').datetime.now()
+        today_dt = now_dt.date()
+        time_now = now_dt.time().replace(microsecond=0)
+        
+        for ticker in tickers:
+            if await check_trend_template(ticker, spy_data):
+                qualified.append(ticker)
+                from aignitequant.app.db import Stage2Data
+                entry = Stage2Data(
+                    symbol=ticker,
+                    data_date=today_dt,
+                    data_time=time_now,
+                    data_json=_json.dumps({"symbol": ticker, "date": str(today_dt), "criteria": "Stage2_with_RelativeStrength"})
+                )
+                db_session = SessionLocal()
+                db_session.add(entry)
+                db_session.commit()
+                db_session.close()
+        
+        results["stage2"] = f"OK - {len(qualified)} candidates"
+    except Exception as e:
+        results["stage2"] = f"error: {e}"
+    
+    # --- VCP Scanner ---
+    try:
+        from aignitequant.app.strategies.vcp_scanner_strategy import scan_sp500_for_vcp, save_vcp_results_to_db
+        vcp_results = await scan_sp500_for_vcp(batch_size=10, delay=2.0)
+        saved = save_vcp_results_to_db(vcp_results)
+        results["vcp"] = f"OK - {saved} candidates"
+    except Exception as e:
+        results["vcp"] = f"error: {e}"
+    
+    # --- Felix ---
+    try:
+        from aignitequant.app.strategies.felix_strategy import run_and_store_felix
+        await run_and_store_felix()
+        results["felix"] = "OK"
+    except Exception as e:
+        results["felix"] = f"error: {e}"
+    
+    # --- Vibia Hybrid ---
+    try:
+        from aignitequant.app.strategies.vibia_j_hybrid_strategy import run_and_store_vibia_hybrid
+        await run_and_store_vibia_hybrid()
+        results["vibia_hybrid"] = "OK"
+    except Exception as e:
+        results["vibia_hybrid"] = f"error: {e}"
+    
+    # --- Marios Swing ---
+    try:
+        from aignitequant.app.strategies.marios_stamatoudis_swing_strategy import run_and_store_swing_trades
+        await run_and_store_swing_trades()
+        results["marios_swing"] = "OK"
+    except Exception as e:
+        results["marios_swing"] = f"error: {e}"
+    
+    # --- Follow The Money ---
+    try:
+        from aignitequant.app.strategies.follow_the_money import main as run_ftm
+        await run_ftm()
+        results["follow_the_money"] = "OK"
+    except Exception as e:
+        results["follow_the_money"] = f"error: {e}"
+    
+    # --- Earnings Quality ---
+    try:
+        from aignitequant.app.strategies.earnings_quality_score import main as run_eq
+        await run_eq()
+        results["earnings_quality"] = "OK"
+    except Exception as e:
+        results["earnings_quality"] = f"error: {e}"
+    
+    # --- Options ---
+    try:
+        from aignitequant.app.strategies.leap_option_strategy1 import get_qqq_leap_signal
+        from aignitequant.app.strategies.leap_option_strategy2 import get_qqq_gap_down_leap_signal
+        r1 = get_qqq_leap_signal()
+        r2 = get_qqq_gap_down_leap_signal()
+        results["options"] = f"OK - leap1:{r1.get('signal','?')}, leap2:{r2.get('signal','?')}"
+    except Exception as e:
+        results["options"] = f"error: {e}"
     
     return {
-        "status": "dispatched",
-        "message": "All strategies sent to Celery worker. Check worker logs for progress.",
+        "status": "completed",
+        "message": "All strategies executed in-process. Results written to DB.",
         "tasks": results
     }
 
