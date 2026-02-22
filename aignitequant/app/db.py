@@ -214,19 +214,31 @@ class FelixData(Base):
 
 # Always use project root for data.db
 import os
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATABASE_URL = f"sqlite:///{os.path.join(BASE_DIR, 'data.db')}"
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+# Use DATABASE_URL from environment (PostgreSQL on Railway) or fall back to SQLite for local dev
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+if DATABASE_URL:
+    # Railway PostgreSQL — no SQLite-specific args
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_size=5, max_overflow=10)
+    print(f"🐘 Using PostgreSQL: {DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else 'configured'}")
+else:
+    # Local development fallback — SQLite
+    DATABASE_URL = f"sqlite:///{os.path.join(BASE_DIR, 'data.db')}"
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+    print(f"📁 Using SQLite: {DATABASE_URL}")
+    
+    # Enable WAL mode for concurrent reads during writes (SQLite only)
+    @event.listens_for(engine, "connect")
+    def set_sqlite_wal_mode(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# Enable WAL mode for concurrent reads during writes (critical for market data fetch + strategy reads)
-@event.listens_for(engine, "connect")
-def set_sqlite_wal_mode(dbapi_connection, connection_record):
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA synchronous=NORMAL")  # Faster writes with WAL
-    cursor.close()
 
 # Create tables
 Base.metadata.create_all(bind=engine)

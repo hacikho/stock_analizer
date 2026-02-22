@@ -522,7 +522,8 @@ async def run_all_strategies():
     Requires market_data table to be populated first (POST /market_data/fetch).
     Each strategy reads from DB and writes results to its own table.
     
-    Note: Runs in-process (not via Celery) so results are in the same SQLite DB.
+    Note: Runs in-process for synchronous results. With PostgreSQL, Celery tasks
+    also share the same DB and work correctly via celery-beat/worker.
     This may take several minutes to complete.
     """
     import traceback

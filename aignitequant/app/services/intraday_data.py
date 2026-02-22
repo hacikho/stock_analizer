@@ -106,7 +106,7 @@ async def _fetch_intraday_ticker(
                 },
                 inplace=True,
             )
-            # Remove timezone info for SQLite storage (keep as naive UTC)
+            # Remove timezone info for storage (keep as naive UTC)
             df["bar_timestamp"] = df["bar_timestamp"].dt.tz_localize(None)
 
             # Classify session

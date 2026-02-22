@@ -144,13 +144,13 @@ async def fetch_all_market_data(
 def _upsert_market_data(df: pd.DataFrame) -> int:
     """
     Insert or update OHLCV rows into market_data table.
-    Uses INSERT OR REPLACE (SQLite) for upsert semantics.
+    Uses INSERT ... ON CONFLICT ... DO UPDATE (works on both PostgreSQL and SQLite).
     """
     db = SessionLocal()
     try:
         rows = 0
         for _, row in df.iterrows():
-            # Use raw SQL for upsert (SQLite INSERT OR REPLACE)
+            # Use raw SQL for upsert (ON CONFLICT works on PostgreSQL and SQLite)
             db.execute(
                 text("""
                     INSERT INTO market_data (symbol, trade_date, open, high, low, close, volume)
