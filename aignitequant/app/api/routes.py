@@ -515,6 +515,51 @@ def get_ticker_data(symbol: str, days: int = Query(default=30, ge=1, le=730)):
     }
 
 
+@router.get("/market_data/test_fetch", tags=["Market Data"])
+async def test_market_data_fetch():
+    """
+    Diagnostic endpoint: test S&P 500 scraping and Polygon API with 1 ticker.
+    Use this to verify dependencies (lxml) and API key before running full fetch.
+    """
+    import traceback
+    results = {}
+    
+    # Step 1: Test S&P 500 ticker fetch
+    try:
+        from aignitequant.app.services.sp500 import get_sp500_tickers
+        tickers = await get_sp500_tickers()
+        results["sp500_tickers"] = f"OK - {len(tickers)} tickers"
+        results["sample_tickers"] = tickers[:5]
+    except Exception as e:
+        results["sp500_tickers"] = f"FAILED: {e}"
+        results["sp500_traceback"] = traceback.format_exc()
+        return results
+    
+    # Step 2: Test Polygon API with 1 ticker
+    try:
+        import os
+        api_key = os.getenv("API_KEY")
+        results["polygon_api_key"] = "SET" if api_key else "MISSING"
+        
+        if api_key:
+            import aiohttp, datetime
+            today = datetime.date.today()
+            start = today - datetime.timedelta(days=30)
+            url = f"https://api.polygon.io/v2/aggs/ticker/AAPL/range/1/day/{start}/{today}"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params={"apiKey": api_key}) as resp:
+                    results["polygon_status"] = resp.status
+                    if resp.status == 200:
+                        data = await resp.json()
+                        results["polygon_results"] = len(data.get("results", []))
+                    else:
+                        results["polygon_body"] = await resp.text()
+    except Exception as e:
+        results["polygon_error"] = f"FAILED: {e}"
+    
+    return results
+
+
 @router.post("/market_data/fetch", tags=["Market Data"])
 async def trigger_market_data_fetch():
     """
@@ -523,10 +568,16 @@ async def trigger_market_data_fetch():
     This runs synchronously and may take 2-5 minutes for ~500 tickers.
     """
     import asyncio
+    import traceback
     from aignitequant.app.services.market_data import fetch_all_market_data
     
-    stats = await fetch_all_market_data(batch_size=5, delay=1.0)
-    return {"status": "success", **stats}
+    try:
+        stats = await fetch_all_market_data(batch_size=5, delay=1.0)
+        return {"status": "success", **stats}
+    except Exception as e:
+        print(f"❌ Market data fetch error: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/fear_greed")
 def fear_greed_index():
