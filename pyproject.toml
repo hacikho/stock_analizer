@@ -21,6 +21,7 @@ celery = ">=5.3.6"
 redis = ">=5.0.4"
 pytz = ">=2024.1"
 numpy = ">=1.24.0"
+lxml = ">=5.0.0"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
