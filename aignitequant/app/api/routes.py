@@ -1,4 +1,8 @@
-from aignitequant.app.db import Stage2Data, OptionSignalData, SessionLocal, CanSlimData, BoraData, GoldenCrossData, VCPData, EarningsQualityData, FelixData, MarketData, MarketDataMeta
+from aignitequant.app.db import (
+    Stage2Data, OptionSignalData, SessionLocal, CanSlimData, BoraData,
+    GoldenCrossData, VCPData, EarningsQualityData, FelixData, MarketData,
+    MarketDataMeta, IntradayBar, BoraPosition, SwingTradeData, VibiaHybridData,
+)
 from aignitequant.app.strategies.leap_option_strategy1 import get_qqq_leap_signal
 from aignitequant.app.strategies.leap_option_strategy2 import get_qqq_gap_down_leap_signal
 from aignitequant.app.services.sp500 import clear_sp500_cache
@@ -700,6 +704,117 @@ async def run_all_strategies():
         "message": "All strategies executed in-process. Results written to DB.",
         "tasks": results
     }
+
+
+@router.get("/db/health", tags=["Diagnostics"])
+def db_table_health():
+    """
+    Database Health Check — shows row count and latest write time for every table.
+
+    Use this to verify:
+    - PostgreSQL connection is working
+    - Market data fetch is populating data
+    - Each Celery scheduled task is running and writing results
+    - How fresh the data is in each table
+
+    Returns a status per table: row_count, latest_date, latest_time, last_created_at.
+    """
+    from sqlalchemy import func as sa_func
+
+    session = SessionLocal()
+    try:
+        tables = {}
+
+        # --- market_data (centralized OHLCV) ---
+        count = session.query(sa_func.count(MarketData.id)).scalar() or 0
+        latest = session.query(
+            sa_func.max(MarketData.trade_date),
+            sa_func.max(MarketData.created_at),
+        ).first()
+        tables["market_data"] = {
+            "rows": count,
+            "latest_trade_date": str(latest[0]) if latest and latest[0] else None,
+            "last_write": str(latest[1]) if latest and latest[1] else None,
+        }
+
+        # --- market_data_meta ---
+        count = session.query(sa_func.count(MarketDataMeta.id)).scalar() or 0
+        latest = session.query(sa_func.max(MarketDataMeta.updated_at)).scalar()
+        tables["market_data_meta"] = {
+            "rows": count,
+            "last_write": str(latest) if latest else None,
+        }
+
+        # --- intraday_bars ---
+        count = session.query(sa_func.count(IntradayBar.id)).scalar() or 0
+        latest = session.query(
+            sa_func.max(IntradayBar.bar_timestamp),
+            sa_func.max(IntradayBar.created_at),
+        ).first()
+        tables["intraday_bars"] = {
+            "rows": count,
+            "latest_bar": str(latest[0]) if latest and latest[0] else None,
+            "last_write": str(latest[1]) if latest and latest[1] else None,
+        }
+
+        # --- Strategy tables (all share data_date / data_time / created_at) ---
+        strategy_models = {
+            "canslim_data": CanSlimData,
+            "bora_data": BoraData,
+            "golden_cross_data": GoldenCrossData,
+            "stage2_data": Stage2Data,
+            "vcp_data": VCPData,
+            "felix_data": FelixData,
+            "earnings_quality_data": EarningsQualityData,
+            "option_signal_data": OptionSignalData,
+            "swing_trade_data": SwingTradeData,
+            "vibia_hybrid_data": VibiaHybridData,
+        }
+        for table_name, model in strategy_models.items():
+            count = session.query(sa_func.count(model.id)).scalar() or 0
+            latest = session.query(
+                sa_func.max(model.data_date),
+                sa_func.max(model.data_time),
+                sa_func.max(model.created_at),
+            ).first()
+            tables[table_name] = {
+                "rows": count,
+                "latest_date": str(latest[0]) if latest and latest[0] else None,
+                "latest_time": str(latest[1]) if latest and latest[1] else None,
+                "last_write": str(latest[2]) if latest and latest[2] else None,
+            }
+
+        # --- bora_positions (separate structure) ---
+        count = session.query(sa_func.count(BoraPosition.id)).scalar() or 0
+        latest = session.query(
+            sa_func.max(BoraPosition.entry_date),
+            sa_func.max(BoraPosition.created_at),
+        ).first()
+        tables["bora_positions"] = {
+            "rows": count,
+            "latest_entry_date": str(latest[0]) if latest and latest[0] else None,
+            "last_write": str(latest[1]) if latest and latest[1] else None,
+        }
+
+        # Summary
+        empty = [t for t, info in tables.items() if info["rows"] == 0]
+        populated = [t for t, info in tables.items() if info["rows"] > 0]
+
+        return {
+            "status": "ok",
+            "summary": {
+                "total_tables": len(tables),
+                "populated": len(populated),
+                "empty": len(empty),
+                "empty_tables": empty,
+            },
+            "tables": tables,
+        }
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
+    finally:
+        session.close()
 
 
 @router.get("/market_data/test_fetch", tags=["Market Data"])
