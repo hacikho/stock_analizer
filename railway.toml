@@ -1,7 +1,14 @@
+# Railway configuration for AigniteQuant API
+# Note: Deploy as 3 separate services in Railway:
+# 1. api-service (this config)
+# 2. celery-worker-service (use: python start_celery_worker.py)
+# 3. celery-beat-service (use: python start_celery_beat.py)
+
 [build]
 builder = "nixpacks"
 
 [deploy]
-startCommand = "uvicorn stock_analizer.app.main:app --host 0.0.0.0 --port $PORT"
-healthcheckPath = "/health"
+# API Service - Main FastAPI application
+startCommand = "python start_api.py"
+healthcheckPath = "/"
 restartPolicyType = "ON_FAILURE"
