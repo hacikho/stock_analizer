@@ -1,0 +1,10 @@
+# Railway configuration for Celery Worker
+# Deploy this as a separate service in Railway
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+# Celery Worker - Executes scheduled tasks
+startCommand = "python start_celery_worker.py"
+restartPolicyType = "ON_FAILURE"

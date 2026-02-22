@@ -11,16 +11,35 @@ venv/
 .env.production
 .env.development
 
+# API Keys and secrets
+API_KEY
+FMP_API_KEY
+POLYGON_API_KEY
+secrets.json
+config.json
+keys.txt
+api_keys.py
+
 # Bytecode and caches
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+.pytest_cache/
 
 # Database files
 *.db
 *.sqlite3
 data.db
+stock_data.db
+
+# Reports and output files
+reports/
+*.json
+*.csv
+*.xlsx
+analysis_results/
+screening_results/
 
 # Logs
 *.log
@@ -28,6 +47,8 @@ logs/
 
 # IDE files
 .vscode/settings.json
+.vscode/launch.json
+.vscode
 .idea/
 *.swp
 *.swo
@@ -39,12 +60,79 @@ Thumbs.db
 # Poetry cache/config (optional)
 .poetry/
 
-# API keys and secrets
-secrets.json
-config.json
-keys.txt
-
 # Model files (if you save ML models)
 *.h5
 *.pkl
 *.joblib
+lstm_model.h5
+
+# Testing
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Local test/demo scripts
+tests/test_sector_analysis.py

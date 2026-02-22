@@ -1,0 +1,10 @@
+# Railway configuration for Celery Beat Scheduler
+# Deploy this as a separate service in Railway
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+# Celery Beat - Schedules periodic tasks
+startCommand = "python start_celery_beat.py"
+restartPolicyType = "ON_FAILURE"
