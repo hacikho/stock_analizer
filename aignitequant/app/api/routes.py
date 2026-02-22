@@ -583,25 +583,25 @@ async def run_all_strategies():
     
     # --- CANSLIM ---
     try:
-        from aignitequant.app.strategies.canslim_strategy import canslim_screen
-        r = canslim_screen()
-        results["canslim"] = f"OK - {len(r)} candidates"
+        from aignitequant.app.strategies.canslim_strategy import run_and_store_canslim
+        await run_and_store_canslim()
+        results["canslim"] = "OK"
     except Exception as e:
         results["canslim"] = f"error: {e}"
     
     # --- BORA ---
     try:
-        from aignitequant.app.strategies.bora_strategy import scan_symbols
-        r = scan_symbols()
-        results["bora"] = f"OK - {len(r)} signals"
+        from aignitequant.app.strategies.bora_strategy import run_and_store_bora
+        await run_and_store_bora()
+        results["bora"] = "OK"
     except Exception as e:
         results["bora"] = f"error: {e}"
     
     # --- Golden Cross ---
     try:
-        from aignitequant.app.strategies.golden_cross_strategy import golden_cross_strategy
-        r = golden_cross_strategy()
-        results["golden_cross"] = f"OK - {len(r)} signals"
+        from aignitequant.app.strategies.golden_cross_strategy import run_and_store_golden_cross
+        await run_and_store_golden_cross()
+        results["golden_cross"] = "OK"
     except Exception as e:
         results["golden_cross"] = f"error: {e}"
     
@@ -693,9 +693,42 @@ async def run_all_strategies():
     try:
         from aignitequant.app.strategies.leap_option_strategy1 import get_qqq_leap_signal
         from aignitequant.app.strategies.leap_option_strategy2 import get_qqq_gap_down_leap_signal
+        import json as _ojson
+        from datetime import datetime as _dt
+        
+        now = _dt.now()
+        today_dt = now.date()
+        time_now = now.time().replace(microsecond=0)
+        
         r1 = get_qqq_leap_signal()
         r2 = get_qqq_gap_down_leap_signal()
-        results["options"] = f"OK - leap1:{r1.get('signal','?')}, leap2:{r2.get('signal','?')}"
+        
+        # Save to option_signal_data table
+        db_session = SessionLocal()
+        try:
+            if r1:
+                entry1 = OptionSignalData(
+                    strategy="leap_option_qqq",
+                    symbol="QQQ",
+                    data_date=today_dt,
+                    data_time=time_now,
+                    data_json=_ojson.dumps(r1) if isinstance(r1, dict) else str(r1),
+                )
+                db_session.add(entry1)
+            if r2:
+                entry2 = OptionSignalData(
+                    strategy="leap_option_qqq_gap",
+                    symbol="QQQ",
+                    data_date=today_dt,
+                    data_time=time_now,
+                    data_json=_ojson.dumps(r2) if isinstance(r2, dict) else str(r2),
+                )
+                db_session.add(entry2)
+            db_session.commit()
+        finally:
+            db_session.close()
+        
+        results["options"] = f"OK - leap1:{r1.get('signal','?') if isinstance(r1, dict) else '?'}, leap2:{r2.get('signal','?') if isinstance(r2, dict) else '?'}"
     except Exception as e:
         results["options"] = f"error: {e}"
     

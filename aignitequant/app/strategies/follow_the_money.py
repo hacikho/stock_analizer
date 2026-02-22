@@ -36,7 +36,11 @@ def extract_call_put_counts(option_data):
 import sys, os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
 import pandas as pd
-import matplotlib.pyplot as plt
+try:
+    import matplotlib.pyplot as plt
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
 import numpy as np
 import json
 from aignitequant.app.services.sp500 import get_sp500_tickers, get_sector_map
@@ -624,21 +628,22 @@ async def get_sector_breadth(date=None):
             print(f"{sector_etfs.get(etf, etf):<20} ({etf}): {surge:.1f}%")
 
     # Optional: Plot rolling average volume for each sector
-    plt.figure(figsize=(12,6))
-    for etf in sector_etfs.keys():
-        plt.plot(volume_avg.index, volume_avg[etf], label=etf)
-    plt.title("Sector 20-Day Rolling Average Volume")
-    plt.legend()
-    plt.show()
+    if HAS_MATPLOTLIB:
+        plt.figure(figsize=(12,6))
+        for etf in sector_etfs.keys():
+            plt.plot(volume_avg.index, volume_avg[etf], label=etf)
+        plt.title("Sector 20-Day Rolling Average Volume")
+        plt.legend()
+        plt.show()
 
-    # Plot relative strength
-    plt.figure(figsize=(12,6))
-    for etf in sector_etfs.keys():
-        plt.plot(relative_strength.index, relative_strength[etf], label=etf)
+        # Plot relative strength
+        plt.figure(figsize=(12,6))
+        for etf in sector_etfs.keys():
+            plt.plot(relative_strength.index, relative_strength[etf], label=etf)
 
-    plt.title("Sector Relative Strength vs SPY")
-    plt.legend()
-    plt.show()
+        plt.title("Sector Relative Strength vs SPY")
+        plt.legend()
+        plt.show()
 
 
     # --- Options Activity Analysis (Polygon.io) ---
