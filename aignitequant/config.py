@@ -15,8 +15,9 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     
     # API Config
-    API_HOST: str = "localhost"
+    API_HOST: str = "0.0.0.0"
     API_PORT: int = 8000
+    PORT: Optional[int] = None  # Railway sets this automatically
     
     # Database Config
     DATABASE_URL: Optional[str] = None
@@ -39,6 +40,9 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
     ]
+    
+    # Frontend URL (set in Railway for production CORS)
+    FRONTEND_URL: Optional[str] = None
     
     # Paths
     REPORTS_DIR: str = "reports"

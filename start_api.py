@@ -12,13 +12,17 @@ import uvicorn
 from aignitequant.config import settings
 
 if __name__ == "__main__":
+    # Railway sets PORT env var; fall back to API_PORT from config
+    port = settings.PORT or settings.API_PORT
+    host = settings.API_HOST
+    
     print(f"🚀 Starting {settings.APP_NAME} v{settings.APP_VERSION}")
-    print(f"📍 Server: http://{settings.API_HOST}:{settings.API_PORT}")
-    print(f"📚 API Docs: http://{settings.API_HOST}:{settings.API_PORT}/docs")
+    print(f"📍 Server: http://{host}:{port}")
+    print(f"📚 API Docs: http://{host}:{port}/docs")
     
     uvicorn.run(
         "aignitequant.app.main:app",
-        host=settings.API_HOST,
-        port=settings.API_PORT,
+        host=host,
+        port=port,
         reload=settings.DEBUG
     )

@@ -11,4 +11,6 @@ builder = "nixpacks"
 # API Service - Main FastAPI application
 startCommand = "python start_api.py"
 healthcheckPath = "/"
+healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
