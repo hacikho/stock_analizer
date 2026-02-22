@@ -1,30 +1,27 @@
-[project]
+[tool.poetry]
 name = "aignitequant"
 version = "1.0.0"
 description = "AigniteQuant - Stock market analysis API for profitable trading strategies"
-authors = [
-    {name = "haci karahasanoglu",email = "haci@hacikho.com"}
-]
+authors = ["haci karahasanoglu <haci@hacikho.com>"]
 readme = "README.md"
-requires-python = ">=3.11"
-dependencies = [
-    "uvicorn>=0.34.2",
-    "aiohttp>=3.11.18",
-    "pandas>=2.2.3",
-    "fastapi>=0.115.12",
-    "python-dotenv>=1.0.0",
-    "pydantic-settings>=2.0.0",
-    "sqlalchemy>=2.0.0",
-    "cachetools>=5.5.2",
-    "yfinance>=0.2.61",
-    "fear-and-greed>=0.4",
-    "celery>=5.3.6",
-    "redis>=5.0.4",
-    "pytz>=2024.1",
-    "numpy>=1.24.0",
-]
 
+[tool.poetry.dependencies]
+python = ">=3.11"
+uvicorn = ">=0.34.2"
+aiohttp = ">=3.11.18"
+pandas = ">=2.2.3"
+fastapi = ">=0.115.12"
+python-dotenv = ">=1.0.0"
+pydantic-settings = ">=2.0.0"
+sqlalchemy = ">=2.0.0"
+cachetools = ">=5.5.2"
+yfinance = ">=0.2.61"
+fear-and-greed = ">=0.4"
+celery = ">=5.3.6"
+redis = ">=5.0.4"
+pytz = ">=2024.1"
+numpy = ">=1.24.0"
 
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
+requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
