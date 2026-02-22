@@ -515,6 +515,46 @@ def get_ticker_data(symbol: str, days: int = Query(default=30, ge=1, le=730)):
     }
 
 
+@router.post("/strategies/run_all", tags=["Strategies"])
+async def run_all_strategies():
+    """
+    Manually trigger ALL strategy tasks.
+    Requires market_data table to be populated first (POST /market_data/fetch).
+    Each strategy reads from DB and writes results to its own table.
+    """
+    import traceback
+    results = {}
+    
+    strategies = [
+        ("canslim", "aignitequant.tasks.run_canslim"),
+        ("bora", "aignitequant.tasks.run_bora_strategy"),
+        ("golden_cross", "aignitequant.tasks.run_golden_cross"),
+        ("stage2", "aignitequant.tasks.run_stage2"),
+        ("vcp", "aignitequant.tasks.run_vcp_scanner"),
+        ("felix", "aignitequant.tasks.run_felix_strategy"),
+        ("vibia_hybrid", "aignitequant.tasks.run_vibia_hybrid"),
+        ("marios_swing", "aignitequant.tasks.run_marios_swing"),
+        ("follow_the_money", "aignitequant.tasks.run_follow_the_money"),
+        ("earnings_quality", "aignitequant.tasks.run_earnings_quality"),
+        ("options", "aignitequant.tasks.run_option_strategies"),
+    ]
+    
+    from aignitequant.tasks.celery_app import app as celery_app
+    
+    for name, task_name in strategies:
+        try:
+            task = celery_app.send_task(task_name)
+            results[name] = f"dispatched (task_id={task.id})"
+        except Exception as e:
+            results[name] = f"error: {e}"
+    
+    return {
+        "status": "dispatched",
+        "message": "All strategies sent to Celery worker. Check worker logs for progress.",
+        "tasks": results
+    }
+
+
 @router.get("/market_data/test_fetch", tags=["Market Data"])
 async def test_market_data_fetch():
     """

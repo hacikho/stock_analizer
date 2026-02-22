@@ -348,3 +348,57 @@ def run_follow_the_money_sector():
     except Exception as e:
         print(f"[Celery][ERROR] Follow The Money (sector) analysis failed: {str(e)}")
         return {"status": "error", "error": str(e)}
+
+
+@app.task(name='aignitequant.tasks.run_felix_strategy')
+def run_felix_strategy():
+    """Execute Felix Strategy (SMA crossover + volume spike detection)"""
+    import asyncio
+    
+    now = datetime.datetime.now(EASTERN)
+    print(f"[Celery] Running Felix strategy at {now}")
+    
+    try:
+        from aignitequant.app.strategies.felix_strategy import run_and_store_felix
+        results = asyncio.run(run_and_store_felix())
+        print(f"[Celery] Felix strategy completed successfully")
+        return {"status": "success", "timestamp": now.isoformat()}
+    except Exception as e:
+        print(f"[Celery][ERROR] Felix strategy failed: {str(e)}")
+        return {"status": "error", "error": str(e)}
+
+
+@app.task(name='aignitequant.tasks.run_vibia_hybrid')
+def run_vibia_hybrid():
+    """Execute Vibia J Hybrid Strategy (CANSLIM + TQQQ entry/exit)"""
+    import asyncio
+    
+    now = datetime.datetime.now(EASTERN)
+    print(f"[Celery] Running Vibia Hybrid strategy at {now}")
+    
+    try:
+        from aignitequant.app.strategies.vibia_j_hybrid_strategy import run_and_store_vibia_hybrid
+        results = asyncio.run(run_and_store_vibia_hybrid())
+        print(f"[Celery] Vibia Hybrid strategy completed successfully")
+        return {"status": "success", "timestamp": now.isoformat()}
+    except Exception as e:
+        print(f"[Celery][ERROR] Vibia Hybrid strategy failed: {str(e)}")
+        return {"status": "error", "error": str(e)}
+
+
+@app.task(name='aignitequant.tasks.run_marios_swing')
+def run_marios_swing():
+    """Execute Marios Stamatoudis Swing Trade Strategy"""
+    import asyncio
+    
+    now = datetime.datetime.now(EASTERN)
+    print(f"[Celery] Running Marios Swing strategy at {now}")
+    
+    try:
+        from aignitequant.app.strategies.marios_stamatoudis_swing_strategy import run_and_store_swing_trades
+        results = asyncio.run(run_and_store_swing_trades())
+        print(f"[Celery] Marios Swing strategy completed successfully")
+        return {"status": "success", "timestamp": now.isoformat()}
+    except Exception as e:
+        print(f"[Celery][ERROR] Marios Swing strategy failed: {str(e)}")
+        return {"status": "error", "error": str(e)}
