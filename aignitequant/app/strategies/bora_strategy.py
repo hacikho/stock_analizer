@@ -657,15 +657,26 @@ async def run_and_store_bora():
                 positions_data.append((sym, entry_price, stop_loss, target_price))
         
         # Add to BoraData (screening results - historical record)
-        for i, sym in enumerate(picks, 1):
+        if picks:
+            for i, sym in enumerate(picks, 1):
+                entry = BoraData(
+                    symbol=sym,
+                    data_date=today,
+                    data_time=time_now,
+                    data_json=json.dumps({"Ticker": sym}),
+                )
+                session.add(entry)
+                print(f"   💾 Added {sym} to BoraData ({i}/{len(picks)})")
+        else:
+            # Save a summary row so health check shows the scan ran
             entry = BoraData(
-                symbol=sym,
+                symbol="_SCAN_SUMMARY",
                 data_date=today,
                 data_time=time_now,
-                data_json=json.dumps({"Ticker": sym}),
+                data_json=json.dumps({"status": "completed", "picks": 0, "tickers_scanned": len(tickers)}),
             )
             session.add(entry)
-            print(f"   💾 Added {sym} to BoraData ({i}/{len(picks)})")
+            print("   💾 Saved scan summary (0 picks) to BoraData")
         
         # Add to BoraPosition (active positions for exit monitoring)
         for sym, entry_price, stop_loss, target_price in positions_data:
@@ -688,12 +699,14 @@ async def run_and_store_bora():
         
         session.commit()
         print(f"\n🎉 SUCCESS: Inserted {len(picks)} entries and {len(positions_data)} positions into DB")
+        return len(picks)
         
     except Exception as e:
         print(f"❌ Error in run_and_store_bora: {e}")
         import traceback
         traceback.print_exc()
         session.rollback()
+        raise  # Re-raise so callers know it failed
     finally:
         session.close()
 

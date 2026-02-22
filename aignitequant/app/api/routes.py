@@ -592,8 +592,8 @@ async def run_all_strategies():
     # --- BORA ---
     try:
         from aignitequant.app.strategies.bora_strategy import run_and_store_bora
-        await run_and_store_bora()
-        results["bora"] = "OK"
+        count = await run_and_store_bora()
+        results["bora"] = f"OK - {count} picks"
     except Exception as e:
         results["bora"] = f"error: {e}"
     
@@ -703,32 +703,33 @@ async def run_all_strategies():
         r1 = get_qqq_leap_signal()
         r2 = get_qqq_gap_down_leap_signal()
         
-        # Save to option_signal_data table
+        sig1 = r1.get('signal', 'NONE') if isinstance(r1, dict) else 'NONE'
+        sig2 = r2.get('signal', 'NONE') if isinstance(r2, dict) else 'NONE'
+        
+        # Always save to option_signal_data table (even if no signal)
         db_session = SessionLocal()
         try:
-            if r1:
-                entry1 = OptionSignalData(
-                    strategy="leap_option_qqq",
-                    symbol="QQQ",
-                    data_date=today_dt,
-                    data_time=time_now,
-                    data_json=_ojson.dumps(r1) if isinstance(r1, dict) else str(r1),
-                )
-                db_session.add(entry1)
-            if r2:
-                entry2 = OptionSignalData(
-                    strategy="leap_option_qqq_gap",
-                    symbol="QQQ",
-                    data_date=today_dt,
-                    data_time=time_now,
-                    data_json=_ojson.dumps(r2) if isinstance(r2, dict) else str(r2),
-                )
-                db_session.add(entry2)
+            entry1 = OptionSignalData(
+                strategy="leap_option_qqq",
+                symbol="QQQ",
+                data_date=today_dt,
+                data_time=time_now,
+                data_json=_ojson.dumps(r1 if isinstance(r1, dict) else {"signal": "NONE"}),
+            )
+            db_session.add(entry1)
+            entry2 = OptionSignalData(
+                strategy="leap_option_qqq_gap",
+                symbol="QQQ",
+                data_date=today_dt,
+                data_time=time_now,
+                data_json=_ojson.dumps(r2 if isinstance(r2, dict) else {"signal": "NONE"}),
+            )
+            db_session.add(entry2)
             db_session.commit()
         finally:
             db_session.close()
         
-        results["options"] = f"OK - leap1:{r1.get('signal','?') if isinstance(r1, dict) else '?'}, leap2:{r2.get('signal','?') if isinstance(r2, dict) else '?'}"
+        results["options"] = f"OK - leap1:{sig1}, leap2:{sig2}"
     except Exception as e:
         results["options"] = f"error: {e}"
     
