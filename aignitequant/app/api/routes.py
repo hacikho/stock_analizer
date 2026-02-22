@@ -78,7 +78,17 @@ def get_canslim_db():
         # Get the most recent time for today
         latest = session.query(CanSlimData.data_time).filter(CanSlimData.data_date == today).order_by(CanSlimData.data_time.desc()).first()
         if not latest:
-            return {"error": "No CANSLIM data for today"}
+            # Fall back to the most recent data from any day
+            latest_any = session.query(CanSlimData.data_date, CanSlimData.data_time).order_by(
+                CanSlimData.data_date.desc(), CanSlimData.data_time.desc()
+            ).first()
+            if not latest_any:
+                return {"error": "No CANSLIM data available"}
+            rows = session.query(CanSlimData).filter(
+                CanSlimData.data_date == latest_any[0], CanSlimData.data_time == latest_any[1]
+            ).all()
+            result = [row.data_json for row in rows]
+            return {"date": str(latest_any[0]), "time": str(latest_any[1]), "results": result}
         # Get all rows for today with the most recent time
         rows = session.query(CanSlimData).filter(CanSlimData.data_date == today, CanSlimData.data_time == latest[0]).all()
         result = [row.data_json for row in rows]
@@ -111,7 +121,17 @@ def get_bora_db():
         today = date.today()
         latest = session.query(BoraData.data_time).filter(BoraData.data_date == today).order_by(BoraData.data_time.desc()).first()
         if not latest:
-            return {"error": "No BORA data for today"}
+            # Fall back to the most recent data from any day
+            latest_any = session.query(BoraData.data_date, BoraData.data_time).order_by(
+                BoraData.data_date.desc(), BoraData.data_time.desc()
+            ).first()
+            if not latest_any:
+                return {"error": "No BORA data available"}
+            rows = session.query(BoraData).filter(
+                BoraData.data_date == latest_any[0], BoraData.data_time == latest_any[1]
+            ).all()
+            result = [row.data_json for row in rows]
+            return {"date": str(latest_any[0]), "time": str(latest_any[1]), "results": result}
         rows = session.query(BoraData).filter(BoraData.data_date == today, BoraData.data_time == latest[0]).all()
         result = [row.data_json for row in rows]
         return {"date": str(today), "time": str(latest[0]), "results": result}
@@ -141,7 +161,17 @@ def get_golden_cross_db():
         today = date.today()
         latest = session.query(GoldenCrossData.data_time).filter(GoldenCrossData.data_date == today).order_by(GoldenCrossData.data_time.desc()).first()
         if not latest:
-            return {"error": "No Golden Cross data for today"}
+            # Fall back to the most recent data from any day
+            latest_any = session.query(GoldenCrossData.data_date, GoldenCrossData.data_time).order_by(
+                GoldenCrossData.data_date.desc(), GoldenCrossData.data_time.desc()
+            ).first()
+            if not latest_any:
+                return {"error": "No Golden Cross data available"}
+            rows = session.query(GoldenCrossData).filter(
+                GoldenCrossData.data_date == latest_any[0], GoldenCrossData.data_time == latest_any[1]
+            ).all()
+            result = [row.data_json for row in rows]
+            return {"date": str(latest_any[0]), "time": str(latest_any[1]), "results": result}
         rows = session.query(GoldenCrossData).filter(GoldenCrossData.data_date == today, GoldenCrossData.data_time == latest[0]).all()
         result = [row.data_json for row in rows]
         return {"date": str(today), "time": str(latest[0]), "results": result}
@@ -177,7 +207,17 @@ def get_stage2_db():
         # Get the most recent time for today
         latest = session.query(Stage2Data.data_time).filter(Stage2Data.data_date == today).order_by(Stage2Data.data_time.desc()).first()
         if not latest:
-            return {"error": "No Stage 2 data for today"}
+            # Fall back to the most recent data from any day
+            latest_any = session.query(Stage2Data.data_date, Stage2Data.data_time).order_by(
+                Stage2Data.data_date.desc(), Stage2Data.data_time.desc()
+            ).first()
+            if not latest_any:
+                return {"error": "No Stage 2 data available"}
+            rows = session.query(Stage2Data).filter(
+                Stage2Data.data_date == latest_any[0], Stage2Data.data_time == latest_any[1]
+            ).all()
+            result = [row.data_json for row in rows]
+            return {"date": str(latest_any[0]), "time": str(latest_any[1]), "results": result}
         # Get all rows for today with the most recent time
         rows = session.query(Stage2Data).filter(Stage2Data.data_date == today, Stage2Data.data_time == latest[0]).all()
         result = [row.data_json for row in rows]
@@ -279,9 +319,16 @@ def get_earnings_quality_db():
         ).order_by(EarningsQualityData.data_time.desc()).first()
         
         if not latest:
-            return {"error": "No Earnings Quality data for today"}
+            # Fall back to the most recent data from any day
+            latest_any = session.query(EarningsQualityData.data_date, EarningsQualityData.data_time).order_by(
+                EarningsQualityData.data_date.desc(), EarningsQualityData.data_time.desc()
+            ).first()
+            if not latest_any:
+                return {"error": "No Earnings Quality data available"}
+            latest = (latest_any[1],)
+            today = latest_any[0]
         
-        # Get all rows for today with the most recent time
+        # Get all rows for the date with the most recent time
         rows = session.query(EarningsQualityData).filter(
             EarningsQualityData.data_date == today,
             EarningsQualityData.data_time == latest[0]
