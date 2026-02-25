@@ -14,3 +14,15 @@ healthcheckPath = "/"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
+
+# Celery Beat Service
+[services.celery-beat-service]
+startCommand = "python start_celery_beat.py"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
+# Celery Worker Service
+[services.celery-worker-service]
+startCommand = "python start_celery_worker.py"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
