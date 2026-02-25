@@ -14,21 +14,15 @@ def setup_periodic_tasks(sender, **kwargs):
     """
     
     # ============================================================
-    # MARKET DATA FETCH — Every 10 minutes during market hours
+    # MARKET DATA FETCH — Every 10 minutes from pre-market to post-market
+    # Covers 4:00 AM – 8:00 PM ET (hours 4-20), Monday-Friday
     # This MUST run before any strategy tasks.
     # Populates the shared market_data table that all strategies read from.
     # ============================================================
     sender.add_periodic_task(
-        crontab(minute='*/10', hour='9-16', day_of_week='1-5'),
+        crontab(minute='*/10', hour='4-20', day_of_week='1-5'),
         app.signature('aignitequant.tasks.fetch_market_data'),
-        name='Market Data Fetch every 10 min (market hours)'
-    )
-    
-    # Also run once at 6:00 AM to ensure pre-market strategies have fresh data
-    sender.add_periodic_task(
-        crontab(minute=0, hour=6, day_of_week='1-5'),
-        app.signature('aignitequant.tasks.fetch_market_data'),
-        name='Market Data Fetch at 6:00 AM (pre-market)'
+        name='Market Data Fetch every 10 min (4 AM – 8 PM ET)'
     )
     
     # ============================================================
@@ -44,80 +38,61 @@ def setup_periodic_tasks(sender, **kwargs):
         name='Intraday 10-min bars (4 AM – 8 PM ET)'
     )
     
-    # CANSLIM Strategy - Every 30 minutes during market hours
-    # Runs at :30 and :00 of each hour
+    # CANSLIM Strategy - Every 15 minutes from pre-market to post-market
     sender.add_periodic_task(
-        crontab(minute=30, hour='9-15', day_of_week='1-5'),
+        crontab(minute='*/15', hour='4-20', day_of_week='1-5'),
         app.signature('aignitequant.tasks.run_canslim'),
-        name='CANSLIM at :30 past hour (market hours)'
+        name='CANSLIM every 15 min (4 AM – 8 PM ET)'
     )
+
+    # Option Strategies - Every 15 minutes from pre-market to post-market
     sender.add_periodic_task(
-        crontab(minute=0, hour='10-16', day_of_week='1-5'),
-        app.signature('aignitequant.tasks.run_canslim'),
-        name='CANSLIM at :00 past hour (market hours)'
-    )
-    
-    # Option Strategies - Every 30 minutes during market hours
-    sender.add_periodic_task(
-        crontab(minute=30, hour='9-15', day_of_week='1-5'),
+        crontab(minute='*/15', hour='4-20', day_of_week='1-5'),
         app.signature('aignitequant.tasks.run_option_strategies'),
-        name='Options at :30 past hour (market hours)'
+        name='Options every 15 min (4 AM – 8 PM ET)'
     )
+
+    # BORA Strategy - Every 15 minutes from pre-market to post-market
     sender.add_periodic_task(
-        crontab(minute=0, hour='10-16', day_of_week='1-5'),
-        app.signature('aignitequant.tasks.run_option_strategies'),
-        name='Options at :00 past hour (market hours)'
-    )
-    
-    # BORA Strategy - Every hour during market hours
-    sender.add_periodic_task(
-        crontab(minute=0, hour='10-16', day_of_week='1-5'),
+        crontab(minute='*/15', hour='4-20', day_of_week='1-5'),
         app.signature('aignitequant.tasks.run_bora_strategy'),
-        name='BORA at top of hour (market hours)'
+        name='BORA every 15 min (4 AM – 8 PM ET)'
     )
     
-    # Golden Cross - Once per day before market open
+    # Golden Cross - Every 15 minutes from pre-market to post-market
     sender.add_periodic_task(
-        crontab(minute=0, hour=9, day_of_week='1-5'),
+        crontab(minute='*/15', hour='4-20', day_of_week='1-5'),
         app.signature('aignitequant.tasks.run_golden_cross'),
-        name='Golden Cross daily pre-market'
+        name='Golden Cross every 15 min (4 AM – 8 PM ET)'
     )
-    
-    # Stage 2 Analysis - Once per day after market close
+
+    # Stage 2 Analysis - Every 15 minutes from pre-market to post-market
     sender.add_periodic_task(
-        crontab(minute=30, hour=16, day_of_week='1-5'),
+        crontab(minute='*/15', hour='4-20', day_of_week='1-5'),
         app.signature('aignitequant.tasks.run_stage2'),
-        name='Stage 2 daily post-market'
+        name='Stage 2 every 15 min (4 AM – 8 PM ET)'
     )
-    
-    # VCP Scanner - Once per day after market close (takes ~10-15 minutes)
+
+    # VCP Scanner - Every 15 minutes from pre-market to post-market
     sender.add_periodic_task(
-        crontab(minute=0, hour=17, day_of_week='1-5'),
+        crontab(minute='*/15', hour='4-20', day_of_week='1-5'),
         app.signature('aignitequant.tasks.run_vcp_scanner'),
-        name='VCP Scanner daily post-market'
+        name='VCP Scanner every 15 min (4 AM – 8 PM ET)'
     )
-    
-    # Follow-The-Money Analysis - Every 15 minutes during market hours
-    # Runs at :00, :15, :30, :45 of each hour during market hours (9:30 AM - 4:00 PM ET)
+
+    # Follow-The-Money Analysis - Every 15 minutes from pre-market to post-market
     sender.add_periodic_task(
-        crontab(minute='0,15,30,45', hour='9', day_of_week='1-5'),
+        crontab(minute='*/15', hour='4-20', day_of_week='1-5'),
         app.signature('aignitequant.tasks.run_follow_the_money'),
-        name='Follow-The-Money at 9:00, 9:15, 9:30, 9:45 AM'
+        name='Follow-The-Money every 15 min (4 AM – 8 PM ET)'
     )
+
+    # Earnings Quality Analysis - Every 15 minutes from pre-market to post-market
     sender.add_periodic_task(
-        crontab(minute='0,15,30,45', hour='10-15', day_of_week='1-5'),
-        app.signature('aignitequant.tasks.run_follow_the_money'),
-        name='Follow-The-Money every 15 min (market hours)'
+        crontab(minute='*/15', hour='4-20', day_of_week='1-5'),
+        app.signature('aignitequant.tasks.run_earnings_quality'),
+        name='Earnings Quality every 15 min (4 AM – 8 PM ET)'
     )
-    sender.add_periodic_task(
-        crontab(minute='0', hour='16', day_of_week='1-5'),
-        app.signature('aignitequant.tasks.run_follow_the_money'),
-        name='Follow-The-Money at market close (4:00 PM)'
-    )
-    
-    # Earnings Quality Analysis - Once per day at 6:00 AM ET (pre-market)
-    # SCHEDULE JUSTIFICATION:
-    # - Runs at 6:00 AM ET Monday-Friday (3.5 hours before market open)
     # - All previous trading day's data is finalized and complete
     # - After-hours earnings (4-8 PM) have 10+ hours to settle
     # - Polygon Starter plan has 15-min delay, but daily bars are historical (no delay)
