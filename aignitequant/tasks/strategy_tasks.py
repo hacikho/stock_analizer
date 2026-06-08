@@ -401,4 +401,4 @@ def run_marios_swing():
         return {"status": "success", "timestamp": now.isoformat()}
     except Exception as e:
         print(f"[Celery][ERROR] Marios Swing strategy failed: {str(e)}")
-        return {"status": "error", "error": str(e)}                                                                                  
+        return {"status": "error", "error": str(e)}
