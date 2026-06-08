@@ -37,20 +37,20 @@ finance_cache = {}
 CACHE_TTL = 60 * 10  # 10 minutes
 def fetch_yfinance_income_stmt(ticker):
     """
-    Fetch the income statement for a ticker using yfinance, with caching.
-    Args:
-        ticker: Stock symbol.
-    Returns:
-        Pandas DataFrame of income statement, or None on error.
+    Fetch annual and quarterly income statements for a ticker using yfinance, with caching.
+    Returns a dict with 'annual' and 'quarterly' DataFrames.
     """
     now = time.time()
     if ticker in finance_cache and now - finance_cache[ticker][1] < CACHE_TTL:
         return finance_cache[ticker][0]
     try:
         ticker_obj = yf.Ticker(ticker)
-        income = ticker_obj.income_stmt
-        finance_cache[ticker] = (income, time.time())
-        return income
+        result = {
+            "annual": ticker_obj.income_stmt,
+            "quarterly": ticker_obj.quarterly_income_stmt,
+        }
+        finance_cache[ticker] = (result, time.time())
+        return result
     except Exception as e:
         print(f"YFinance fetch error for {ticker}: {e}")
         return None
@@ -113,9 +113,9 @@ async def fetch_polygon_data_batch(tickers, session, fetch_func, batch_size=5, d
 
 def quarterly_earnings_growth(income):
     """
-    Calculate quarterly earnings growth percentage from income statement.
+    Calculate quarterly earnings growth percentage from quarterly income statement.
     Args:
-        income: DataFrame with 'Net Income' row.
+        income: DataFrame with 'Net Income' row (should be quarterly_income_stmt).
     Returns:
         Growth percentage or np.nan.
     """
@@ -124,6 +124,8 @@ def quarterly_earnings_growth(income):
             return np.nan
         net_income = income.loc["Net Income"]
         latest, prior = net_income.iloc[0], net_income.iloc[1]
+        if prior == 0:
+            return np.nan
         return (latest - prior) / abs(prior) * 100
     except Exception as e:
         print(f"Quarterly earnings error: {e}")
@@ -453,14 +455,19 @@ async def canslim_screen(tickers):
                     return None
 
                 ticker_obj = yf.Ticker(ticker)
-                # Diagnostics for income statement
-                if income is not None:
-                    print(f"{ticker} income shape: {income.shape}, index: {income.index}")
-                else:
-                    print(f"{ticker} income is None")
 
-                q = quarterly_earnings_growth(income)
-                y = annual_earnings_growth(income)
+                # income is now a dict with 'annual' and 'quarterly' keys
+                annual_stmt = income.get("annual") if isinstance(income, dict) else income
+                quarterly_stmt = income.get("quarterly") if isinstance(income, dict) else None
+
+                if annual_stmt is not None:
+                    print(f"{ticker} annual income shape: {annual_stmt.shape}")
+                if quarterly_stmt is not None:
+                    print(f"{ticker} quarterly income shape: {quarterly_stmt.shape}")
+
+                # Use quarterly_income_stmt for Q/Q growth, annual for Y/Y growth
+                q = quarterly_earnings_growth(quarterly_stmt)
+                y = annual_earnings_growth(annual_stmt)
                 near_52w = is_near_52w_high(df, threshold=0.90)  # Lowered threshold to 90%
                 vol = volume_spike(df, pct_increase=15)  # Lowered volume spike to 15%
                 rs = await relative_strength(df, market_df)

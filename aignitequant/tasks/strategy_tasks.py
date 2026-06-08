@@ -134,16 +134,16 @@ def run_canslim():
     """
     Execute CANSLIM screening strategy
     """
-    from aignitequant.app.strategies.canslim_strategy import canslim_screen
-    
+    import asyncio
+    from aignitequant.app.strategies.canslim_strategy import run_and_store_canslim
+
     now = datetime.datetime.now(EASTERN)
     print(f"[Celery] Running CANSLIM strategy at {now}")
-    
+
     try:
-        results = canslim_screen()
-        print(f"[Celery] CANSLIM completed: found {len(results)} candidates")
-        return {"status": "success", "candidates": len(results), "timestamp": now.isoformat()}
-    
+        asyncio.run(run_and_store_canslim())
+        return {"status": "success", "timestamp": now.isoformat()}
+
     except Exception as e:
         print(f"[Celery][ERROR] {str(e)}")
         return {"status": "error", "error": str(e)}
@@ -401,4 +401,4 @@ def run_marios_swing():
         return {"status": "success", "timestamp": now.isoformat()}
     except Exception as e:
         print(f"[Celery][ERROR] Marios Swing strategy failed: {str(e)}")
-        return {"status": "error", "error": str(e)}
+        return {"status": "error", "error": str(e)}                                                                                  
