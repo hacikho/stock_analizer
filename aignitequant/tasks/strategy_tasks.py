@@ -154,16 +154,20 @@ def run_bora_strategy():
     """
     Execute BORA (Breakout Reversal Analysis) strategy
     """
-    from aignitequant.app.strategies.bora_strategy import scan_symbols
-    
+    import asyncio
+    from aignitequant.app.strategies.bora_strategy import run_and_store_bora, check_and_exit_positions
+
     now = datetime.datetime.now(EASTERN)
     print(f"[Celery] Running BORA strategy at {now}")
-    
+
     try:
-        results = scan_symbols()
-        print(f"[Celery] BORA completed: found {len(results)} signals")
-        return {"status": "success", "signals": len(results), "timestamp": now.isoformat()}
-    
+        # Check exit signals on active positions first
+        asyncio.run(check_and_exit_positions())
+        # Then scan for new picks and save to DB
+        count = asyncio.run(run_and_store_bora())
+        print(f"[Celery] BORA completed: found {count} signals")
+        return {"status": "success", "signals": count, "timestamp": now.isoformat()}
+
     except Exception as e:
         print(f"[Celery][ERROR] {str(e)}")
         return {"status": "error", "error": str(e)}
