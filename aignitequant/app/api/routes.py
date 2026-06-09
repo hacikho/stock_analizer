@@ -9,10 +9,26 @@ from aignitequant.app.services.sp500 import clear_sp500_cache
 from aignitequant.app.services.fear_greed import get_cnn_fear_greed
 
 from datetime import date
+import datetime as _dt
 from sqlalchemy.orm import Session
 from fastapi import APIRouter, Query, HTTPException
 from typing import Optional
 
+
+def format_last_updated(data_date, data_time) -> str:
+    """
+    Return a human-readable 'last updated' string, e.g. 'Jun 8, 2026 at 6:06 PM ET'.
+    Accepts date/time as date/time objects or strings.
+    """
+    try:
+        if isinstance(data_date, str):
+            data_date = _dt.date.fromisoformat(data_date)
+        if isinstance(data_time, str):
+            data_time = _dt.time.fromisoformat(data_time.split(".")[0])
+        dt = _dt.datetime.combine(data_date, data_time)
+        return dt.strftime("%-d %b %Y at %-I:%M %p ET")
+    except Exception:
+        return str(data_date) if data_date else "Unknown"
 
 
 router = APIRouter()
@@ -92,11 +108,11 @@ def get_canslim_db():
                 CanSlimData.data_date == latest_any[0], CanSlimData.data_time == latest_any[1]
             ).all()
             result = [row.data_json for row in rows]
-            return {"date": str(latest_any[0]), "time": str(latest_any[1]), "results": result}
+            return {"date": str(latest_any[0]), "time": str(latest_any[1]), "last_updated": format_last_updated(latest_any[0], latest_any[1]), "results": result}
         # Get all rows for today with the most recent time
         rows = session.query(CanSlimData).filter(CanSlimData.data_date == today, CanSlimData.data_time == latest[0]).all()
         result = [row.data_json for row in rows]
-        return {"date": str(today), "time": str(latest[0]), "results": result}
+        return {"date": str(today), "time": str(latest[0]), "last_updated": format_last_updated(today, latest[0]), "results": result}
     finally:
         session.close()
 
@@ -135,10 +151,10 @@ def get_bora_db():
                 BoraData.data_date == latest_any[0], BoraData.data_time == latest_any[1]
             ).all()
             result = [row.data_json for row in rows]
-            return {"date": str(latest_any[0]), "time": str(latest_any[1]), "results": result}
+            return {"date": str(latest_any[0]), "time": str(latest_any[1]), "last_updated": format_last_updated(latest_any[0], latest_any[1]), "results": result}
         rows = session.query(BoraData).filter(BoraData.data_date == today, BoraData.data_time == latest[0]).all()
         result = [row.data_json for row in rows]
-        return {"date": str(today), "time": str(latest[0]), "results": result}
+        return {"date": str(today), "time": str(latest[0]), "last_updated": format_last_updated(today, latest[0]), "results": result}
     finally:
         session.close()
 
@@ -175,10 +191,10 @@ def get_golden_cross_db():
                 GoldenCrossData.data_date == latest_any[0], GoldenCrossData.data_time == latest_any[1]
             ).all()
             result = [row.data_json for row in rows]
-            return {"date": str(latest_any[0]), "time": str(latest_any[1]), "results": result}
+            return {"date": str(latest_any[0]), "time": str(latest_any[1]), "last_updated": format_last_updated(latest_any[0], latest_any[1]), "results": result}
         rows = session.query(GoldenCrossData).filter(GoldenCrossData.data_date == today, GoldenCrossData.data_time == latest[0]).all()
         result = [row.data_json for row in rows]
-        return {"date": str(today), "time": str(latest[0]), "results": result}
+        return {"date": str(today), "time": str(latest[0]), "last_updated": format_last_updated(today, latest[0]), "results": result}
     finally:
         session.close()
 
@@ -221,11 +237,11 @@ def get_stage2_db():
                 Stage2Data.data_date == latest_any[0], Stage2Data.data_time == latest_any[1]
             ).all()
             result = [row.data_json for row in rows]
-            return {"date": str(latest_any[0]), "time": str(latest_any[1]), "results": result}
+            return {"date": str(latest_any[0]), "time": str(latest_any[1]), "last_updated": format_last_updated(latest_any[0], latest_any[1]), "results": result}
         # Get all rows for today with the most recent time
         rows = session.query(Stage2Data).filter(Stage2Data.data_date == today, Stage2Data.data_time == latest[0]).all()
         result = [row.data_json for row in rows]
-        return {"date": str(today), "time": str(latest[0]), "results": result}
+        return {"date": str(today), "time": str(latest[0]), "last_updated": format_last_updated(today, latest[0]), "results": result}
     finally:
         session.close()
 
@@ -273,26 +289,28 @@ def get_vcp_db(limit: Optional[int] = Query(50, description="Maximum number of r
             return {
                 "date": str(latest_any_day[0]),
                 "time": str(latest_any_day[1]),
+                "last_updated": format_last_updated(latest_any_day[0], latest_any_day[1]),
                 "count": len(result),
                 "results": result
             }
-        
+
         # Get all rows for today with the most recent time
         rows = session.query(VCPData).filter(
             VCPData.data_date == today,
             VCPData.data_time == latest[0]
         ).limit(limit).all()
-        
+
         result = [{
             "symbol": row.symbol,
             "sector": row.sector,
             "status": row.status,
             "details": row.data_json
         } for row in rows]
-        
+
         return {
             "date": str(today),
             "time": str(latest[0]),
+            "last_updated": format_last_updated(today, latest[0]),
             "count": len(result),
             "results": result
         }
@@ -348,6 +366,7 @@ def get_earnings_quality_db():
         return {
             "date": str(today),
             "time": str(latest[0]),
+            "last_updated": format_last_updated(today, latest[0]),
             "stocks_analyzed": len(result),
             "results": result
         }
@@ -405,6 +424,7 @@ def get_felix_db():
             return {
                 "date": str(latest_any[0]),
                 "time": str(latest_any[1]),
+                "last_updated": format_last_updated(latest_any[0], latest_any[1]),
                 "count": len(result),
                 "results": result,
             }
@@ -420,6 +440,7 @@ def get_felix_db():
         return {
             "date": str(today),
             "time": str(latest[0]),
+            "last_updated": format_last_updated(today, latest[0]),
             "count": len(result),
             "results": result,
         }
