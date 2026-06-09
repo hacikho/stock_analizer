@@ -5,6 +5,7 @@ import datetime
 import pytz
 from aignitequant.tasks.celery_app import app
 from aignitequant.app.db import SessionLocal, OptionSignalData, CanSlimData
+from aignitequant.app.services.events import publish_update
 
 
 EASTERN = pytz.timezone('US/Eastern')
@@ -152,6 +153,7 @@ def run_option_strategies():
 
         db.commit()
         print(f"[Celery] Option strategies completed: {saved} signals saved")
+        publish_update("options")
         return {"status": "success", "signals": saved, "timestamp": now.isoformat()}
 
     except Exception as e:
@@ -175,6 +177,7 @@ def run_canslim():
 
     try:
         asyncio.run(run_and_store_canslim())
+        publish_update("canslim")
         return {"status": "success", "timestamp": now.isoformat()}
 
     except Exception as e:
@@ -199,6 +202,7 @@ def run_bora_strategy():
         # Then scan for new picks and save to DB
         count = asyncio.run(run_and_store_bora())
         print(f"[Celery] BORA completed: found {count} signals")
+        publish_update("bora")
         return {"status": "success", "signals": count, "timestamp": now.isoformat()}
 
     except Exception as e:
@@ -221,6 +225,7 @@ def run_golden_cross():
         picks = asyncio.run(run_and_store_golden_cross())
         count = len(picks) if picks else 0
         print(f"[Celery] Golden Cross completed: found {count} signals")
+        publish_update("golden_cross")
         return {"status": "success", "signals": count, "timestamp": now.isoformat()}
 
     except Exception as e:
@@ -243,6 +248,7 @@ def run_stage2():
         qualified = asyncio.run(run_and_store_stage2())
         count = len(qualified) if qualified else 0
         print(f"[Celery] Stage 2 completed: found {count} candidates")
+        publish_update("stage2")
         return {"status": "success", "candidates": count, "timestamp": now.isoformat()}
 
     except Exception as e:
@@ -276,6 +282,7 @@ def run_vcp_scanner():
         saved_count = save_vcp_results_to_db(results)
         
         print(f"[Celery] VCP scanner completed: found {saved_count} VCP candidates")
+        publish_update("vcp")
         return {"status": "success", "candidates": saved_count, "timestamp": now.isoformat()}
     
     except Exception as e:
@@ -302,8 +309,9 @@ def run_follow_the_money():
         results = asyncio.run(run_analysis())
         
         print(f"[Celery] Follow-The-Money analysis completed successfully")
+        publish_update("follow_the_money")
         return {"status": "success", "timestamp": now.isoformat()}
-    
+
     except Exception as e:
         print(f"[Celery][ERROR] Follow-The-Money failed: {str(e)}")
         return {"status": "error", "error": str(e)}
@@ -337,8 +345,9 @@ def run_earnings_quality():
         asyncio.run(run_analysis())
         
         print(f"[Celery] Earnings Quality analysis completed successfully")
+        publish_update("earnings_quality")
         return {"status": "success", "timestamp": now.isoformat()}
-    
+
     except Exception as e:
         print(f"[Celery][ERROR] Earnings Quality analysis failed: {str(e)}")
         return {"status": "error", "error": str(e)}
@@ -376,6 +385,7 @@ def run_follow_the_money_sector():
         asyncio.run(run_analysis())
         
         print(f"[Celery] Follow The Money (sector) analysis completed successfully")
+        publish_update("follow_the_money_sector")
         return {"status": "success", "timestamp": now.isoformat()}
         
     except Exception as e:
@@ -395,6 +405,7 @@ def run_felix_strategy():
         from aignitequant.app.strategies.felix_strategy import run_and_store_felix
         results = asyncio.run(run_and_store_felix())
         print(f"[Celery] Felix strategy completed successfully")
+        publish_update("felix")
         return {"status": "success", "timestamp": now.isoformat()}
     except Exception as e:
         print(f"[Celery][ERROR] Felix strategy failed: {str(e)}")
@@ -413,6 +424,7 @@ def run_vibia_hybrid():
         from aignitequant.app.strategies.vibia_j_hybrid_strategy import run_and_store_vibia_hybrid
         results = asyncio.run(run_and_store_vibia_hybrid())
         print(f"[Celery] Vibia Hybrid strategy completed successfully")
+        publish_update("vibia_hybrid")
         return {"status": "success", "timestamp": now.isoformat()}
     except Exception as e:
         print(f"[Celery][ERROR] Vibia Hybrid strategy failed: {str(e)}")
@@ -431,6 +443,7 @@ def run_marios_swing():
         from aignitequant.app.strategies.marios_stamatoudis_swing_strategy import run_and_store_swing_trades
         results = asyncio.run(run_and_store_swing_trades())
         print(f"[Celery] Marios Swing strategy completed successfully")
+        publish_update("marios_swing")
         return {"status": "success", "timestamp": now.isoformat()}
     except Exception as e:
         print(f"[Celery][ERROR] Marios Swing strategy failed: {str(e)}")

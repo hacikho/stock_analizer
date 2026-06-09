@@ -11,10 +11,12 @@ from fastapi.middleware.cors import CORSMiddleware
 async def _market_pulse_loop():
     """Background task: fetch market pulse every 30s, forever."""
     from aignitequant.app.services.market_pulse import fetch_and_store_market_pulse
+    from aignitequant.app.services.events import publish_update
     while True:
         try:
             stats = await fetch_and_store_market_pulse()
             print(f"Market pulse refresh: {stats}")
+            publish_update("market_pulse")
         except Exception as e:
             print(f"WARNING: Market pulse refresh failed: {e}")
         await asyncio.sleep(30)

@@ -9,9 +9,12 @@ from aignitequant.app.services.sp500 import clear_sp500_cache
 from aignitequant.app.services.fear_greed import get_cnn_fear_greed
 
 from datetime import date
+import asyncio
 import datetime as _dt
+import os
 from sqlalchemy.orm import Session
 from fastapi import APIRouter, Query, HTTPException
+from fastapi.responses import StreamingResponse
 from typing import Optional
 
 
@@ -32,6 +35,92 @@ def format_last_updated(data_date, data_time) -> str:
 
 
 router = APIRouter()
+
+
+# ============================================================
+# Server-Sent Events — real-time strategy update stream
+# ============================================================
+
+async def _sse_event_generator():
+    """
+    Subscribe to the Redis strategy_updates pub/sub channel and yield
+    SSE-formatted messages to the connected browser client.
+
+    Protocol:
+      event: strategy_update
+      data: {"strategy": "<name>", "timestamp": "<ISO>"}
+
+    A comment ping is sent every 25 s so proxies/browsers don't drop
+    an idle connection.
+    """
+    import redis.asyncio as aioredis
+    from aignitequant.app.services.events import REDIS_CHANNEL
+
+    redis_url = (
+        os.getenv("REDIS_PRIVATE_URL") or
+        os.getenv("REDIS_URL") or
+        os.getenv("CELERY_BROKER_URL") or
+        "redis://localhost:6379/0"
+    )
+
+    r = aioredis.from_url(redis_url, decode_responses=True)
+    pubsub = r.pubsub()
+    await pubsub.subscribe(REDIS_CHANNEL)
+
+    try:
+        # Confirm connection to the client
+        yield ": connected\n\n"
+
+        while True:
+            try:
+                message = await asyncio.wait_for(
+                    pubsub.get_message(ignore_subscribe_messages=True),
+                    timeout=25.0,
+                )
+                if message and message["type"] == "message":
+                    yield f"event: strategy_update\ndata: {message['data']}\n\n"
+                else:
+                    # Keepalive ping — browsers/proxies drop idle SSE after ~30 s
+                    yield ": ping\n\n"
+            except asyncio.TimeoutError:
+                yield ": ping\n\n"
+    except asyncio.CancelledError:
+        pass
+    finally:
+        await pubsub.unsubscribe(REDIS_CHANNEL)
+        await r.aclose()
+
+
+@router.get("/events", tags=["Events"])
+async def events():
+    """
+    Server-Sent Events stream.  Connect once and receive a push notification
+    every time a strategy task writes new results to the database.
+
+    Event format:
+        event: strategy_update
+        data: {"strategy": "canslim", "timestamp": "2026-06-09T14:00:00Z"}
+
+    Strategy names: market_pulse, canslim, bora, golden_cross, stage2, vcp,
+    options, follow_the_money, follow_the_money_sector, earnings_quality,
+    felix, vibia_hybrid, marios_swing
+
+    Frontend usage (JavaScript):
+        const es = new EventSource('/events');
+        es.addEventListener('strategy_update', e => {
+            const { strategy, timestamp } = JSON.parse(e.data);
+            // re-fetch the endpoint for that strategy
+        });
+    """
+    return StreamingResponse(
+        _sse_event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",   # disable nginx buffering on Railway
+            "Connection": "keep-alive",
+        },
+    )
 
 # Landing page / Health check
 @router.get("/", tags=["General"])
