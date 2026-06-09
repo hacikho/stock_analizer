@@ -69,11 +69,18 @@ def get_last_n_trading_days(n=3):
 
 FMP_API_KEY = os.getenv("FMP_API_KEY")
 
+import pytz as _pytz
+_EASTERN = _pytz.timezone('US/Eastern')
+
+def _et_today():
+    """Return today's date in US/Eastern time (Railway runs UTC)."""
+    return datetime.now(_EASTERN).date()
+
 def get_earnings_tickers_fmp(from_date: datetime, to_date: datetime) -> dict:
     """
     Fetch earnings tickers for a date range from FMP earnings calendar API.
     Returns {ticker: earnings_date} dict.
-    Replaces the fragile Yahoo Finance scraper.
+    Only includes tickers whose earnings date is BEFORE today (ET) — i.e. already reported.
     """
     try:
         from_str = from_date.strftime("%Y-%m-%d")
@@ -88,7 +95,7 @@ def get_earnings_tickers_fmp(from_date: datetime, to_date: datetime) -> dict:
             return {}
 
         data = response.json()
-        today = datetime.now().date()
+        et_today = _et_today()
         result = {}
         for item in data:
             symbol = item.get("symbol", "")
@@ -100,15 +107,15 @@ def get_earnings_tickers_fmp(from_date: datetime, to_date: datetime) -> dict:
                 continue
             try:
                 earnings_dt = datetime.strptime(date_str, "%Y-%m-%d")
-                # Skip any earnings not yet reported (today or future)
-                if earnings_dt.date() >= today:
+                # Only include earnings that have already happened (strictly before today ET)
+                if earnings_dt.date() >= et_today:
                     continue
                 if symbol not in result:
                     result[symbol] = earnings_dt
             except ValueError:
                 continue
 
-        print(f"[FMP] Found {len(result)} earnings tickers ({from_str} → {to_str})")
+        print(f"[FMP] Found {len(result)} confirmed earnings tickers ({from_str} → {to_str}, ET today={et_today})")
         return result
 
     except Exception as e:
@@ -929,13 +936,14 @@ async def main():
     print("🎯 EARNINGS QUALITY SCORE ANALYSIS")
     print("=" * 50)
 
-    # Get last 3 trading days as the date window (exclude today — reports may not be out yet)
-    trading_days = get_last_n_trading_days(4)  # grab 4 so index [1] is yesterday's last trading day
-    to_date = trading_days[1]    # yesterday / last completed trading day
-    from_date = trading_days[-1] # 3 completed trading days ago
-    print(f"Fetching earnings calendar ({from_date.strftime('%Y-%m-%d')} → {to_date.strftime('%Y-%m-%d')}) from FMP...")
+    # Use ET dates throughout — Railway runs UTC so datetime.now() would be wrong
+    et_today = _et_today()
+    et_yesterday = et_today - timedelta(days=1)
+    from_dt = datetime.combine(et_today - timedelta(days=7), datetime.min.time())
+    to_dt = datetime.combine(et_yesterday, datetime.min.time())
+    print(f"Fetching earnings calendar ({from_dt.strftime('%Y-%m-%d')} → {to_dt.strftime('%Y-%m-%d')}, ET today={et_today}) from FMP...")
 
-    earnings_with_dates = get_earnings_tickers_fmp(from_date, to_date)
+    earnings_with_dates = get_earnings_tickers_fmp(from_dt, to_dt)
     all_earnings_tickers = list(earnings_with_dates.keys())
 
     if not all_earnings_tickers:

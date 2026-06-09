@@ -462,25 +462,88 @@ async def list_sp500_sectors():
     
     return list(sector_map.keys())
 
+def scan_symbol_from_df(symbol: str, df: pd.DataFrame) -> dict:
+    """
+    Synchronous VCP screen using a pre-loaded DataFrame.
+    Avoids re-fetching from DB/API when data is already in memory.
+    """
+    try:
+        if df is None or df.empty:
+            return {"symbol": symbol, "VCP": False, "reason": "No data available"}
+
+        # VCP uses capitalised column names; rename if needed
+        if "close" in df.columns and "Close" not in df.columns:
+            df = df.rename(columns={"open": "Open", "high": "High",
+                                    "low": "Low", "close": "Close",
+                                    "volume": "Volume"})
+        df = df.dropna()
+
+        if not in_strong_uptrend(df):
+            return {"symbol": symbol, "VCP": False, "reason": "No strong uptrend"}
+
+        start, end = find_consolidation_window(df)
+        if start is None:
+            return {"symbol": symbol, "VCP": False, "reason": "No clear consolidation"}
+
+        cons_contractions = detect_contractions(df, start, end)
+        if cons_contractions is None:
+            return {"symbol": symbol, "VCP": False, "reason": "No valid contractions"}
+
+        if not volume_drying_up(df, start, end):
+            return {"symbol": symbol, "VCP": False, "reason": "Volume not drying up"}
+
+        breakout = breakout_signal(df, start, end)
+        if breakout is None:
+            return {"symbol": symbol, "VCP": True,
+                    "status": "Pattern forming, no breakout yet",
+                    "base_start": str(df.index[start]),
+                    "base_end": str(df.index[end])}
+
+        return {
+            "symbol": symbol,
+            "VCP": True,
+            "status": "Breakout",
+            "base_start": str(df.index[start]),
+            "base_end": str(df.index[end]),
+            "breakout_info": {k: str(v) if not isinstance(v, (int, float)) else v
+                              for k, v in breakout.items()},
+        }
+    except Exception as e:
+        return {"symbol": symbol, "VCP": False, "reason": f"Error: {e}"}
+
+
 async def scan_sp500_for_vcp(batch_size=10, delay=2.0):
     """
     Scan all S&P 500 stocks for VCP patterns.
-    Uses DB batch read for speed.
+    Uses DB batch read for speed; API fallback for missing tickers.
     """
     import time
     print("Fetching S&P 500 tickers...")
     sp500_tickers = await get_sp500_tickers()
     print(f"Got {len(sp500_tickers)} S&P 500 tickers")
-    
-    # Pre-load all data from DB
+
+    # Batch read from DB — use the data directly instead of discarding it
     t0 = time.time()
     dfs = get_multiple_dataframes_from_db(sp500_tickers)
     db_hits = sum(1 for v in dfs.values() if v is not None and not v.empty)
     print(f"DB batch read: {db_hits}/{len(sp500_tickers)} tickers in {time.time()-t0:.2f}s")
-    
-    print(f"🚀 Starting VCP scan of S&P 500 (batch size: {batch_size}, delay: {delay}s)")
-    results = await scan_multiple_symbols(sp500_tickers, batch_size=batch_size, delay=delay)
-    
+
+    results = []
+    api_fallback = []
+
+    for ticker in sp500_tickers:
+        df = dfs.get(ticker)
+        if df is not None and not df.empty:
+            results.append(scan_symbol_from_df(ticker, df))
+        else:
+            api_fallback.append(ticker)
+
+    # API fallback for tickers missing from DB
+    if api_fallback:
+        print(f"🌐 API fallback for {len(api_fallback)} tickers...")
+        api_results = await scan_multiple_symbols(api_fallback, batch_size=batch_size, delay=delay)
+        results.extend(api_results)
+
     return results
 
 async def scan_sp500_by_sector(sector_name=None, batch_size=10, delay=2.0):
