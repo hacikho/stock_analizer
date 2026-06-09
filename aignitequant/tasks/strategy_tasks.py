@@ -83,44 +83,46 @@ def run_option_strategies():
     """
     Execute option trading strategies and save results to database
     """
+    import json
     from aignitequant.app.strategies.leap_option_strategy1 import get_qqq_leap_signal
     from aignitequant.app.strategies.leap_option_strategy2 import get_qqq_gap_down_leap_signal
-    
+
     now = datetime.datetime.now(EASTERN)
+    today = now.date()
+    time_now = now.time().replace(microsecond=0)
     print(f"[Celery] Running option strategies at {now}")
-    
+
     db = SessionLocal()
+    saved = 0
     try:
-        # Run strategy 1
+        # Run strategy 1 — returns signal dict or None
         result1 = get_qqq_leap_signal()
-        if result1.get("signal") != "NONE":
-            record = OptionSignalData(
-                strategy_name="QQQ LEAP Strategy 1",
-                signal_type=result1["signal"],
-                entry_price=result1.get("entry_price"),
-                strike_price=result1.get("strike_price"),
-                expiration_date=result1.get("expiration_date"),
-                timestamp=now
-            )
-            db.add(record)
-        
-        # Run strategy 2
+        if result1 is not None:
+            db.add(OptionSignalData(
+                strategy="leap_option_qqq",
+                symbol=result1.get("symbol", "QQQ"),
+                data_date=today,
+                data_time=time_now,
+                data_json=json.dumps(result1),
+            ))
+            saved += 1
+
+        # Run strategy 2 — returns signal dict or None
         result2 = get_qqq_gap_down_leap_signal()
-        if result2.get("signal") != "NONE":
-            record = OptionSignalData(
-                strategy_name="QQQ LEAP Strategy 2",
-                signal_type=result2["signal"],
-                entry_price=result2.get("entry_price"),
-                strike_price=result2.get("strike_price"),
-                expiration_date=result2.get("expiration_date"),
-                timestamp=now
-            )
-            db.add(record)
-        
+        if result2 is not None:
+            db.add(OptionSignalData(
+                strategy="leap_option_qqq_gap",
+                symbol=result2.get("symbol", "QQQ"),
+                data_date=today,
+                data_time=time_now,
+                data_json=json.dumps(result2),
+            ))
+            saved += 1
+
         db.commit()
-        print("[Celery] Option strategies completed successfully")
-        return {"status": "success", "timestamp": now.isoformat()}
-    
+        print(f"[Celery] Option strategies completed: {saved} signals saved")
+        return {"status": "success", "signals": saved, "timestamp": now.isoformat()}
+
     except Exception as e:
         db.rollback()
         print(f"[Celery][ERROR] {str(e)}")
