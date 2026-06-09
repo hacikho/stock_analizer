@@ -88,6 +88,7 @@ def get_earnings_tickers_fmp(from_date: datetime, to_date: datetime) -> dict:
             return {}
 
         data = response.json()
+        today = datetime.now().date()
         result = {}
         for item in data:
             symbol = item.get("symbol", "")
@@ -99,6 +100,9 @@ def get_earnings_tickers_fmp(from_date: datetime, to_date: datetime) -> dict:
                 continue
             try:
                 earnings_dt = datetime.strptime(date_str, "%Y-%m-%d")
+                # Skip any earnings not yet reported (today or future)
+                if earnings_dt.date() >= today:
+                    continue
                 if symbol not in result:
                     result[symbol] = earnings_dt
             except ValueError:
@@ -925,10 +929,10 @@ async def main():
     print("🎯 EARNINGS QUALITY SCORE ANALYSIS")
     print("=" * 50)
 
-    # Get last 3 trading days as the date window
-    trading_days = get_last_n_trading_days(3)
-    to_date = trading_days[0]    # most recent
-    from_date = trading_days[-1] # oldest
+    # Get last 3 trading days as the date window (exclude today — reports may not be out yet)
+    trading_days = get_last_n_trading_days(4)  # grab 4 so index [1] is yesterday's last trading day
+    to_date = trading_days[1]    # yesterday / last completed trading day
+    from_date = trading_days[-1] # 3 completed trading days ago
     print(f"Fetching earnings calendar ({from_date.strftime('%Y-%m-%d')} → {to_date.strftime('%Y-%m-%d')}) from FMP...")
 
     earnings_with_dates = get_earnings_tickers_fmp(from_date, to_date)
