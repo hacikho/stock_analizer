@@ -974,6 +974,60 @@ def market_pulse():
     return get_market_pulse()
 
 
+@router.get("/market-pulse/debug", tags=["Market Pulse"])
+def market_pulse_debug():
+    """
+    Debug endpoint: checks Redis connectivity and Polygon API key status.
+    Use this to diagnose why /market-pulse returns stale:true in production.
+    """
+    import os
+    import redis as redis_lib
+
+    # Determine which Redis URL is being used
+    redis_url = (
+        os.getenv("REDIS_PRIVATE_URL") or
+        os.getenv("REDIS_URL") or
+        os.getenv("CELERY_BROKER_URL") or
+        "redis://localhost:6379/0"
+    )
+    redis_host = redis_url.split("@")[-1] if "@" in redis_url else redis_url
+
+    # Test Redis connectivity
+    redis_ok = False
+    redis_error = None
+    cached_data = None
+    try:
+        r = redis_lib.from_url(redis_url, decode_responses=True, socket_timeout=3)
+        r.ping()
+        redis_ok = True
+        cached_data = r.get("market_pulse:snapshot")
+    except Exception as e:
+        redis_error = str(e)
+
+    # Check API key
+    api_key = os.getenv("API_KEY")
+    api_key_set = bool(api_key and len(api_key) > 10)
+
+    return {
+        "redis": {
+            "url_used": redis_host,
+            "connected": redis_ok,
+            "error": redis_error,
+            "has_cached_data": cached_data is not None,
+        },
+        "polygon": {
+            "api_key_set": api_key_set,
+            "api_key_preview": (api_key[:6] + "...") if api_key_set else None,
+        },
+        "env_vars_present": {
+            "REDIS_PRIVATE_URL": bool(os.getenv("REDIS_PRIVATE_URL")),
+            "REDIS_URL": bool(os.getenv("REDIS_URL")),
+            "CELERY_BROKER_URL": bool(os.getenv("CELERY_BROKER_URL")),
+            "API_KEY": api_key_set,
+        },
+    }
+
+
 @router.get("/fear_greed")
 def fear_greed_index():
     """

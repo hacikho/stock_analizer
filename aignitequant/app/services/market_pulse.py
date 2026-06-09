@@ -50,7 +50,16 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 
 # Redis connection — reuse the same URL Celery uses
-_REDIS_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
+# Railway sets REDIS_PRIVATE_URL (internal) or REDIS_URL (public).
+# Fall back to CELERY_BROKER_URL for local dev, then localhost.
+_REDIS_URL = (
+    os.getenv("REDIS_PRIVATE_URL") or
+    os.getenv("REDIS_URL") or
+    os.getenv("CELERY_BROKER_URL") or
+    "redis://localhost:6379/0"
+)
+_redis_host = _REDIS_URL.split("@")[-1] if "@" in _REDIS_URL else _REDIS_URL
+print("Market pulse Redis URL: " + _redis_host)
 _REDIS_KEY = "market_pulse:snapshot"
 REDIS_TTL_SECONDS = 300  # 5 minutes — data considered stale after this
 
