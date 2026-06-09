@@ -43,7 +43,6 @@ from aignitequant.app.services.market_data import get_dataframe_from_db
 warnings.filterwarnings('ignore')
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
-print(f"✅ Polygon API key loaded: {API_KEY is not None}")
 
 def is_trading_day(date):
     """Check if a date is a trading day (not weekend)"""
@@ -68,82 +67,49 @@ def get_last_n_trading_days(n=3):
     
     return trading_days
 
-def get_earnings_tickers(date):
-    """Get earnings tickers directly from Yahoo Finance earnings calendar with better headers"""
-    import time
-    import random
-    import requests
-    from urllib.parse import urlencode
-    
+FMP_API_KEY = os.getenv("FMP_API_KEY")
+
+def get_earnings_tickers_fmp(from_date: datetime, to_date: datetime) -> dict:
+    """
+    Fetch earnings tickers for a date range from FMP earnings calendar API.
+    Returns {ticker: earnings_date} dict.
+    Replaces the fragile Yahoo Finance scraper.
+    """
     try:
-        # Add a longer delay to be more respectful
-        time.sleep(random.uniform(1, 3))
-        
-        date_str = date.strftime("%Y-%m-%d")
-        url = f"https://finance.yahoo.com/calendar/earnings?day={date_str}"
-        
-        # Use requests with proper headers to avoid being blocked
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-        }
-        
-        session = requests.Session()
-        session.headers.update(headers)
-        
-        max_retries = 2
-        for attempt in range(max_retries):
-            try:
-                if attempt > 0:
-                    delay = 10 + random.uniform(5, 10)  # Longer delays
-                    print(f"⏳ Waiting {delay:.1f} seconds before retry {attempt + 1}/{max_retries}...")
-                    time.sleep(delay)
-                
-                response = session.get(url, timeout=30)
-                
-                if response.status_code == 200:
-                    # Use pandas to read HTML from the response content
-                    tables = pd.read_html(response.content)
-                    if tables and len(tables) > 0:
-                        df = tables[0]
-                        if "Symbol" in df.columns:
-                            tickers = df["Symbol"].dropna().tolist()
-                            # Clean up tickers
-                            tickers = [ticker.strip() for ticker in tickers if ticker and len(ticker.strip()) <= 5]
-                            print(f"✅ Found {len(tickers)} earnings for {date_str}")
-                            return tickers
-                        else:
-                            print(f"No Symbol column found in earnings table for {date_str}")
-                            return []
-                    else:
-                        print(f"No earnings table found for {date_str}")
-                        return []
-                
-                elif response.status_code == 429:
-                    print(f"🚫 Rate limit hit (attempt {attempt + 1}/{max_retries})")
-                    if attempt == max_retries - 1:
-                        print(f"❌ Max retries exceeded for {date_str}")
-                        return []
-                    continue
-                else:
-                    print(f"HTTP {response.status_code} error for {date_str}")
-                    return []
-            
-            except Exception as e:
-                print(f"Error getting earnings tickers for {date} (attempt {attempt + 1}): {e}")
-                if attempt == max_retries - 1:
-                    return []
+        from_str = from_date.strftime("%Y-%m-%d")
+        to_str = to_date.strftime("%Y-%m-%d")
+        url = (
+            f"https://financialmodelingprep.com/api/v3/earning_calendar"
+            f"?from={from_str}&to={to_str}&apikey={FMP_API_KEY}"
+        )
+        response = requests.get(url, timeout=15)
+        if response.status_code != 200:
+            print(f"[FMP] Earnings calendar HTTP {response.status_code}")
+            return {}
+
+        data = response.json()
+        result = {}
+        for item in data:
+            symbol = item.get("symbol", "")
+            date_str = item.get("date", "")
+            if not symbol or not date_str:
                 continue
-        
-        return []
-        
+            # Only keep clean tickers (no slashes, dots, etc.)
+            if len(symbol) > 5 or "." in symbol or "/" in symbol:
+                continue
+            try:
+                earnings_dt = datetime.strptime(date_str, "%Y-%m-%d")
+                if symbol not in result:
+                    result[symbol] = earnings_dt
+            except ValueError:
+                continue
+
+        print(f"[FMP] Found {len(result)} earnings tickers ({from_str} → {to_str})")
+        return result
+
     except Exception as e:
-        print(f"Error getting earnings tickers for {date}: {e}")
-        return []
+        print(f"[FMP] Earnings calendar error: {e}")
+        return {}
 
 class EarningsQualityAnalyzer:
     def __init__(self):
@@ -956,56 +922,28 @@ async def main():
     """Main execution function"""
     analyzer = EarningsQualityAnalyzer()
     
-    # Get earnings tickers for today and last 2 trading days
     print("🎯 EARNINGS QUALITY SCORE ANALYSIS")
     print("=" * 50)
-    print("Getting earnings tickers (today + last 2 trading days) from Yahoo Finance...")
-    
-    # Get the last 3 trading days (excluding weekends)
+
+    # Get last 3 trading days as the date window
     trading_days = get_last_n_trading_days(3)
-    print(f"Checking trading days: {[d.strftime('%Y-%m-%d (%A)') for d in trading_days]}")
-    
-    # Try to get real earnings data with dates
-    try:
-        earnings_with_dates = {}  # ticker -> date mapping
-        for target_date in trading_days:
-            tickers = get_earnings_tickers(target_date)
-            # Store each ticker with its earnings date (keep first occurrence)
-            for ticker in tickers:
-                if ticker not in earnings_with_dates:
-                    earnings_with_dates[ticker] = target_date
-        
-        all_earnings_tickers = list(earnings_with_dates.keys())
-    
-    except Exception as e:
-        print(f"⚠️ Yahoo Finance access limited: {e}")
-        print("🔄 Using sample recent earnings tickers for demonstration...")
-        earnings_with_dates = {}
-        
-        # Use some known recent earnings as a fallback (you can update these manually)
-        # These are typical stocks that report earnings frequently
-        sample_tickers = ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'META', 'NVDA', 'AMZN', 'NFLX']
-        all_earnings_tickers = sample_tickers
-    
+    to_date = trading_days[0]    # most recent
+    from_date = trading_days[-1] # oldest
+    print(f"Fetching earnings calendar ({from_date.strftime('%Y-%m-%d')} → {to_date.strftime('%Y-%m-%d')}) from FMP...")
+
+    earnings_with_dates = get_earnings_tickers_fmp(from_date, to_date)
+    all_earnings_tickers = list(earnings_with_dates.keys())
+
     if not all_earnings_tickers:
-        print("❌ No earnings tickers available")
+        print("❌ No earnings tickers returned from FMP — skipping analysis")
         return
-    
+
     print(f"\nFound {len(all_earnings_tickers)} tickers for analysis:")
-    # Print tickers grouped by date
-    if earnings_with_dates:
-        date_groups = {}
-        for ticker, date in earnings_with_dates.items():
-            date_str = date.strftime('%Y-%m-%d')
-            if date_str not in date_groups:
-                date_groups[date_str] = []
-            date_groups[date_str].append(ticker)
-        
-        for date_str in sorted(date_groups.keys(), reverse=True):
-            tickers_list = date_groups[date_str]
-            print(f"  {date_str}: {', '.join(tickers_list)}")
-    else:
-        print(f"  Sample tickers: {', '.join(all_earnings_tickers)}")
+    date_groups: dict = {}
+    for ticker, dt in earnings_with_dates.items():
+        date_groups.setdefault(dt.strftime('%Y-%m-%d'), []).append(ticker)
+    for date_str in sorted(date_groups.keys(), reverse=True):
+        print(f"  {date_str}: {', '.join(date_groups[date_str])}")
     
     print("\n" + "=" * 50)
     print("ANALYZING EARNINGS QUALITY...")
@@ -1016,25 +954,21 @@ async def main():
     
     # Print results
     analyzer.print_results(results)
-    
-    # Save results to JSON
-    import os
-    os.makedirs('reports', exist_ok=True)
-    
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    filename = f'reports/earnings_quality_analysis_{timestamp}.json'
-    
-    with open(filename, 'w') as f:
-        json.dump(results, f, indent=2, default=str)
-    
-    with open('reports/latest_earnings_quality.json', 'w') as f:
-        json.dump(results, f, indent=2, default=str)
-    
-    print(f"\n💾 Results saved to: {filename}")
-    print(f"💾 Latest results: reports/latest_earnings_quality.json")
-    
-    # Save to database
+
+    # Save to database FIRST (before any file I/O that could raise)
     save_to_database(results)
+
+    # Save results to JSON (best-effort; ephemeral on Railway but useful locally)
+    try:
+        import os as _os
+        _os.makedirs('reports', exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        with open(f'reports/earnings_quality_analysis_{timestamp}.json', 'w') as f:
+            json.dump(results, f, indent=2, default=str)
+        with open('reports/latest_earnings_quality.json', 'w') as f:
+            json.dump(results, f, indent=2, default=str)
+    except Exception as _e:
+        print(f"[EarningsQuality] File save skipped: {_e}")
 
 if __name__ == "__main__":
     print("✅ Using Yahoo Finance earnings calendar (pandas read_html)")
