@@ -8,24 +8,29 @@ from aignitequant.config import settings
 from fastapi.middleware.cors import CORSMiddleware
 
 
+async def _market_pulse_loop():
+    """Background task: fetch market pulse every 30s, forever."""
+    from aignitequant.app.services.market_pulse import fetch_and_store_market_pulse
+    while True:
+        try:
+            stats = await fetch_and_store_market_pulse()
+            print(f"Market pulse refresh: {stats}")
+        except Exception as e:
+            print(f"WARNING: Market pulse refresh failed: {e}")
+        await asyncio.sleep(30)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: immediately populate Redis so /market-pulse never
-    # returns stale:true right after a cold deploy.
-    # Celery Beat takes over every 30 seconds after this first fetch.
-    for attempt in range(1, 4):
-        try:
-            from aignitequant.app.services.market_pulse import fetch_and_store_market_pulse
-            print(f"Startup: fetching initial market pulse data (attempt {attempt}/3)...")
-            stats = await fetch_and_store_market_pulse()
-            print(f"Startup market pulse complete: {stats}")
-            break
-        except Exception as e:
-            print(f"WARNING: Startup market pulse attempt {attempt} failed: {e}")
-            if attempt < 3:
-                await asyncio.sleep(3)
-
-    yield  # app is running
+    # Start background loop: populates Redis immediately, then every 30s.
+    # Self-contained in the API process — no Celery Beat needed for this task.
+    task = asyncio.create_task(_market_pulse_loop())
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 
 app = FastAPI(
