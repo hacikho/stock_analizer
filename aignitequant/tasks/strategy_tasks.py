@@ -78,6 +78,37 @@ def fetch_intraday_data():
         return {"status": "error", "error": str(e)}
 
 
+# ============================================================
+# Market Pulse Fetch Task — every 1 minute during market hours
+# Pulls live snapshots for 8 macro instruments:
+#   S&P 500 (SPY), NASDAQ (QQQ), Dow 30 (DIA), Russell 2000 (IWM),
+#   VIX proxy (VXX), Gold (GLD), Bitcoin (X:BTCUSD), Crude Oil (USO)
+# ============================================================
+@app.task(name='aignitequant.tasks.fetch_market_pulse', time_limit=60)
+def fetch_market_pulse():
+    """
+    Fetch live price snapshots for 8 macro instruments and upsert into
+    the market_pulse table. 2-3 lightweight Polygon API calls total.
+    Frontend consumes GET /api/market-pulse which reads from this table.
+    """
+    import asyncio
+
+    now = datetime.datetime.now(EASTERN)
+    print(f"[Celery] Starting Market Pulse Fetch at {now}")
+
+    try:
+        from aignitequant.app.services.market_pulse import fetch_and_store_market_pulse
+
+        stats = asyncio.run(fetch_and_store_market_pulse())
+
+        print(f"[Celery] Market Pulse Fetch complete: {stats}")
+        return {"status": "success", "timestamp": now.isoformat(), **stats}
+
+    except Exception as e:
+        print(f"[Celery][ERROR] Market Pulse Fetch failed: {str(e)}")
+        return {"status": "error", "error": str(e)}
+
+
 @app.task(name='aignitequant.tasks.run_option_strategies')
 def run_option_strategies():
     """

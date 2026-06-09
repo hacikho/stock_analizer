@@ -6,6 +6,7 @@ on_after_configure.connect. The signal-based approach was unreliable because
 the app is fully configured before start_celery_beat.py imports this module,
 so the signal had already fired and tasks were never registered with Beat.
 """
+from datetime import timedelta
 from celery.schedules import crontab
 from aignitequant.tasks.celery_app import app
 
@@ -14,6 +15,20 @@ from aignitequant.tasks.celery_app import app
 # always registered when start_celery_beat.py imports this module.
 # ============================================================
 app.conf.beat_schedule = {
+
+    # --------------------------------------------------------
+    # MARKET PULSE -- every 30 seconds, always-on
+    # Snapshots for 8 macro instruments: SPY (S&P 500), QQQ (NASDAQ),
+    # DIA (Dow 30), IWM (Russell 2000), VXX (VIX proxy), GLD (Gold),
+    # X:BTCUSD (Bitcoin), USO (Crude Oil).
+    # Uses timedelta (not crontab) for sub-minute scheduling.
+    # 2-3 lightweight Polygon API calls per run (~8/min total).
+    # Data age is always < 30s; frontend should poll every 10-30s.
+    # --------------------------------------------------------
+    'market-pulse-every-30sec': {
+        'task': 'aignitequant.tasks.fetch_market_pulse',
+        'schedule': timedelta(seconds=30),
+    },
 
     # --------------------------------------------------------
     # MARKET DATA FETCH -- every 10 min, 4 AM - 8 PM ET

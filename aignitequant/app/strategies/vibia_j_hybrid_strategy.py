@@ -17,11 +17,18 @@ US Investing Championship who achieved triple-digit returns. The strategy combin
 
 2. **TQQQ Swing Trading Strategy:**
    - Pivots to TQQQ when individual setups are scarce or market is choppy
-   - Enters after 10-15% pullback near 50-day or 21-day MA
-   - Uses day 4-5 of rally entry after deep corrections
-   - Position sizing: 25% initial, up to 50% (90-100% in Roth accounts)
-   - Exits on 20%+ moves using comprehensive rules-based checklist
-   - Maintains 25% core position in Stage 2 uptrend
+   - Entry trigger: Nasdaq Composite pulls back 5-8%; then wait for 3 consecutive up days
+   - Treats TQQQ chart like a growth stock (tracks levels/personality on TQQQ, not QQQ)
+   - Stop loss rules (set at entry):
+       a) Default: close below the low of the first up day
+       b) V-shaped recovery / 21 EMA confluence: 2 closes below 21 EMA
+          (if day 3 after 2 closes below 21 EMA is strong → hold; if weak → exit)
+   - Can add remaining cash on follow-through day (day 4+ confirmation)
+   - Position sizing: 25% initial core; let it grow beyond 50% if acting right
+   - Sell into strength (partial, e.g. 10% of position) when:
+       a) Price is 10-15%+ extended above the 21 EMA AND downside reversal off new high
+       b) 2 closes below the 21 EMA (with day 3 confirmation check before full exit)
+   - Target: reduce to ~50% when trimming; do NOT add when position is already oversized
 
 **Core Philosophy:** 
 Focus on true market leaders with potential to double/triple in 12-18 months.
@@ -64,14 +71,20 @@ CANSLIM_MAX_STOCKS = 8  # Hold 6-8 stocks
 CANSLIM_STOP_LOSS_PCT = 0.08  # 8% from MA
 
 # TQQQ Trading Criteria
-TQQQ_MIN_PULLBACK_PCT = 0.10  # 10-15% pullback
-TQQQ_MAX_PULLBACK_PCT = 0.15
-TQQQ_INITIAL_POSITION_SIZE = 0.25  # 25% of portfolio
-TQQQ_MAX_POSITION_SIZE = 0.50  # 50% maximum (90-100% in Roth)
-TQQQ_CORE_POSITION_SIZE = 0.25  # 25% core in Stage 2
-TQQQ_PROFIT_TARGET_PCT = 0.20  # 20% profit target
+# Note: pullback % is measured on the Nasdaq Composite (underlying), not TQQQ itself.
+# 5-8% Nasdaq pullback ≈ 15-24% TQQQ pullback due to 3x leverage.
+TQQQ_NASDAQ_MIN_PULLBACK_PCT = 0.05   # 5% Nasdaq pullback minimum trigger
+TQQQ_NASDAQ_MAX_PULLBACK_PCT = 0.08   # 8% Nasdaq pullback maximum trigger
+TQQQ_CONSECUTIVE_UP_DAYS_ENTRY = 3    # 3 consecutive up days off lows required before entry
+TQQQ_INITIAL_POSITION_SIZE = 0.25     # 25% of portfolio (core position)
+TQQQ_MAX_POSITION_SIZE = 0.50         # Reduce back toward 50% when trimming into strength
+TQQQ_CORE_POSITION_SIZE = 0.25        # 25% core in Stage 2 uptrend
+TQQQ_PROFIT_TARGET_PCT = 0.20         # 20% profit target (rough guide)
+TQQQ_21EMA_EXTENSION_SELL_MIN = 0.10  # 10% above 21 EMA → consider trimming
+TQQQ_21EMA_EXTENSION_SELL_MAX = 0.15  # 15%+ above 21 EMA → stronger sell signal
+TQQQ_21EMA_CLOSES_BELOW_EXIT = 2      # 2 consecutive closes below 21 EMA triggers review
 TQQQ_DISTRIBUTION_DAYS_THRESHOLD = 4  # 4-5 distribution days
-TQQQ_BULLS_VS_BEARS_THRESHOLD = 60  # Above 60%
+TQQQ_BULLS_VS_BEARS_THRESHOLD = 60    # Above 60%
 
 
 # ==================== HELPER FUNCTIONS ====================
@@ -410,41 +423,102 @@ async def scan_canslim_stock(symbol: str, session: aiohttp.ClientSession) -> Opt
 
 # ==================== TQQQ SWING TRADING ====================
 
+def count_consecutive_up_days(df: pd.DataFrame, n: int = 3) -> int:
+    """Count how many consecutive up-close days have occurred ending on the last bar."""
+    count = 0
+    closes = df['close'].values
+    for i in range(len(closes) - 1, 0, -1):
+        if closes[i] > closes[i - 1]:
+            count += 1
+        else:
+            break
+    return count
+
+
 def scan_tqqq_entry_from_df(df: pd.DataFrame) -> Optional[Dict]:
-    """Sync version: Scan pre-loaded TQQQ DataFrame for entry opportunities."""
+    """
+    Sync version: Scan pre-loaded TQQQ DataFrame for entry opportunities.
+
+    Entry rules (from Vibha's transcript):
+    - Wait for Nasdaq Composite to pull back 5-8% (approximated here via TQQQ pullback).
+    - Require 3 consecutive up-close days off the recent low (signal of near-term bottom).
+    - Price should be near or just above the 21 EMA at entry (convergence = tighter stop).
+    - Stop loss: close below the low of the first up day (default), or
+                 2 consecutive closes below 21 EMA if in a V-shaped recovery.
+    - Position: start at 25% of portfolio; can add remaining cash on follow-through day.
+    """
     try:
         symbol = "TQQQ"
         if df is None or len(df) < 100:
             return None
         df = df.sort_index()
+        df['ema_21'] = df['close'].ewm(span=21, adjust=False).mean()
         df['sma_50'] = df['close'].rolling(window=50).mean()
-        df['sma_21'] = df['close'].rolling(window=21).mean()
         df['sma_10'] = df['close'].rolling(window=10).mean()
+
         current_price = df['close'].iloc[-1]
+        ema_21 = df['ema_21'].iloc[-1]
+
+        # Pullback: measured from recent 30-day high (proxy for Nasdaq 5-8% → TQQQ ~15-24%)
         recent_high = df['high'].tail(30).max()
         pullback_pct = (recent_high - current_price) / recent_high
-        near_50d = abs(current_price - df['sma_50'].iloc[-1]) / df['sma_50'].iloc[-1] < 0.03
-        near_21d = abs(current_price - df['sma_21'].iloc[-1]) / df['sma_21'].iloc[-1] < 0.03
-        recent_highs = df['high'].tail(5)
-        making_higher_highs = recent_highs.iloc[-1] > recent_highs.iloc[-3]
+
+        # 3 consecutive up days off the lows
+        consec_up = count_consecutive_up_days(df)
+        three_up_days = consec_up >= TQQQ_CONSECUTIVE_UP_DAYS_ENTRY
+
+        # Near 21 EMA at entry (within 5%)
+        dist_from_21ema = (current_price - ema_21) / ema_21
+        near_21ema = abs(dist_from_21ema) <= 0.05
+
+        # Stage check
         stage = detect_stage(df)
-        entry_signal = (TQQQ_MIN_PULLBACK_PCT <= pullback_pct <= TQQQ_MAX_PULLBACK_PCT) and (near_50d or near_21d) and making_higher_highs and stage == 2
+
+        # Entry requires: meaningful pullback + 3 up days + near 21 EMA + Stage 2
+        # Pullback threshold on TQQQ ≈ 15-24% (3x of 5-8% Nasdaq)
+        entry_signal = (
+            pullback_pct >= 0.15 and
+            three_up_days and
+            (near_21ema or dist_from_21ema <= 0.10) and  # allow up to 10% above 21 EMA
+            stage == 2
+        )
+
         if not entry_signal:
             return None
-        recent_low = df['low'].tail(5).min()
-        stop_loss = recent_low * 0.98
+
+        # Stop loss: low of the first up day (3 days ago relative to current bar)
+        first_up_day_low = float(df['low'].iloc[-TQQQ_CONSECUTIVE_UP_DAYS_ENTRY])
+        stop_loss_default = first_up_day_low
+
+        # Alternative stop: 2 closes below 21 EMA (use when in V-shaped recovery)
+        stop_loss_21ema = float(ema_21)  # exit on 2nd close below this level
+
         signal = {
-            "symbol": "TQQQ", "strategy": "tqqq_swing", "signal_type": "buy",
+            "symbol": "TQQQ",
+            "strategy": "tqqq_swing",
+            "signal_type": "buy",
             "timestamp": datetime.datetime.now().isoformat(),
-            "entry_price": float(current_price), "stop_loss": float(stop_loss),
-            "pullback_from_high": float(pullback_pct * 100), "recent_high": float(recent_high),
-            "near_50d_ma": bool(near_50d), "near_21d_ma": bool(near_21d),
-            "making_higher_highs": bool(making_higher_highs), "stage": int(stage),
-            "position_sizing": {"initial": f"{TQQQ_INITIAL_POSITION_SIZE*100:.0f}%", "max": f"{TQQQ_MAX_POSITION_SIZE*100:.0f}%", "core": f"{TQQQ_CORE_POSITION_SIZE*100:.0f}%", "recommendation": "Start 25%, can go to 50% (90-100% in Roth)"},
-            "target": f"{TQQQ_PROFIT_TARGET_PCT*100:.0f}% profit",
-            "expected_return": "20-25% swing (typical TQQQ swing range)",
+            "entry_price": float(current_price),
+            "ema_21": float(ema_21),
+            "dist_from_21ema_pct": float(dist_from_21ema * 100),
+            "stop_loss_default": stop_loss_default,
+            "stop_loss_21ema_2closes": stop_loss_21ema,
+            "stop_loss_note": "Default: close below low of 1st up day. V-shape: 2 closes below 21 EMA (hold if day 3 strong, exit if weak).",
+            "pullback_from_high_pct": float(pullback_pct * 100),
+            "recent_high": float(recent_high),
+            "consecutive_up_days": int(consec_up),
+            "near_21ema": bool(near_21ema),
+            "stage": int(stage),
+            "position_sizing": {
+                "initial": f"{TQQQ_INITIAL_POSITION_SIZE*100:.0f}%",
+                "max": f"{TQQQ_MAX_POSITION_SIZE*100:.0f}%",
+                "core": f"{TQQQ_CORE_POSITION_SIZE*100:.0f}%",
+                "recommendation": "Enter 25% on 3rd up day. Add remaining cash on follow-through day (day 4+). Let it grow; trim back toward 50% when selling into strength.",
+            },
+            "target": f"{TQQQ_PROFIT_TARGET_PCT*100:.0f}%+ profit",
+            "expected_return": "20-25%+ swing; treat as position trade, not quick flip.",
         }
-        print(f"✅ TQQQ ENTRY: {symbol} @ ${current_price:.2f} | Pullback: {pullback_pct*100:.1f}% | Stage {stage}")
+        print(f"✅ TQQQ ENTRY: {symbol} @ ${current_price:.2f} | Pullback: {pullback_pct*100:.1f}% | {consec_up} up days | 21EMA dist: {dist_from_21ema*100:.1f}% | Stage {stage}")
         return signal
     except Exception as e:
         print(f"Error scanning TQQQ for entry: {e}")
@@ -452,54 +526,137 @@ def scan_tqqq_entry_from_df(df: pd.DataFrame) -> Optional[Dict]:
 
 
 def scan_tqqq_exit_from_df(df: pd.DataFrame) -> Optional[Dict]:
-    """Sync version: Scan pre-loaded TQQQ DataFrame for exit signals."""
+    """
+    Sync version: Scan pre-loaded TQQQ DataFrame for exit signals.
+
+    Sell rules (from Vibha's transcript):
+    PRIMARY — sell INTO STRENGTH (partial, ~10% of position per signal):
+      1. Price is 10-15%+ extended above the 21 EMA AND there's a downside reversal off a new high.
+      2. If already oversized (e.g. >50% of portfolio), do NOT add; look to trim.
+
+    STOP / DEFENSIVE EXIT:
+      3. 2 consecutive closes below the 21 EMA → review position.
+         - If day 3 (the next day) is strong, hold.
+         - If day 3 is weak, begin exiting.
+      4. Close below the low of the first up day (default stop set at entry).
+
+    SECONDARY signals (support the decision to trim):
+      5. Declining volume on new highs.
+      6. 4+ distribution days in last 25 days.
+      7. 3 consecutive down days on rising volume.
+    """
     try:
         symbol = "TQQQ"
         if df is None or len(df) < 100:
             return None
         df = df.sort_index()
+        df['ema_21'] = df['close'].ewm(span=21, adjust=False).mean()
         df['sma_10'] = df['close'].rolling(window=10).mean()
         df['volume_ma'] = df['volume'].rolling(window=50).mean()
+
         current_price = df['close'].iloc[-1]
+        ema_21 = df['ema_21'].iloc[-1]
+        dist_from_21ema = (current_price - ema_21) / ema_21  # positive = above
+
         exit_signals = []
-        week_52_high = df['high'].tail(252).max() if len(df) >= 252 else df['high'].max()
-        at_52w_high = current_price >= week_52_high * 0.99
-        if at_52w_high:
-            exit_signals.append("new_52w_high")
+
+        # --- PRIMARY: 21 EMA extension + downside reversal ---
+        extended_above_21ema = dist_from_21ema >= TQQQ_21EMA_EXTENSION_SELL_MIN
+        highly_extended = dist_from_21ema >= TQQQ_21EMA_EXTENSION_SELL_MAX
+        # Downside reversal: closed in lower half of bar's range after making new high
+        day_range = df['high'].iloc[-1] - df['low'].iloc[-1]
+        close_position = (df['close'].iloc[-1] - df['low'].iloc[-1]) / day_range if day_range > 0 else 0.5
+        recent_high = df['high'].tail(10).max()
+        made_new_high_today = df['high'].iloc[-1] >= recent_high * 0.99
+        downside_reversal = made_new_high_today and close_position < 0.4
+        if extended_above_21ema and downside_reversal:
+            exit_signals.append(f"21ema_extension_{dist_from_21ema*100:.1f}pct_plus_downside_reversal")
+        if highly_extended:
+            exit_signals.append(f"highly_extended_{dist_from_21ema*100:.1f}pct_above_21ema")
+
+        # --- DEFENSIVE: 2 closes below 21 EMA ---
+        closes_below_21ema = sum(
+            1 for i in [-1, -2]
+            if df['close'].iloc[i] < df['ema_21'].iloc[i]
+        )
+        day3_is_weak = (closes_below_21ema >= TQQQ_21EMA_CLOSES_BELOW_EXIT and
+                        df['close'].iloc[-1] < df['close'].iloc[-2])
+        day3_is_strong = (closes_below_21ema >= TQQQ_21EMA_CLOSES_BELOW_EXIT and
+                          df['close'].iloc[-1] > df['close'].iloc[-2])
+        if closes_below_21ema >= TQQQ_21EMA_CLOSES_BELOW_EXIT:
+            if day3_is_weak:
+                exit_signals.append(f"2_closes_below_21ema_day3_weak_EXIT")
+            elif day3_is_strong:
+                exit_signals.append(f"2_closes_below_21ema_day3_strong_HOLD")
+
+        # --- SECONDARY signals ---
         if check_volume_on_high(df):
             exit_signals.append("declining_volume_on_highs")
+
         dist_days = count_distribution_days(df, 25)
         if dist_days >= TQQQ_DISTRIBUTION_DAYS_THRESHOLD:
             exit_signals.append(f"{dist_days}_distribution_days")
+
+        last_3 = df.tail(3)
+        three_down = all(last_3['close'].diff().dropna() < 0)
+        vols_rising = all(last_3['volume'].diff().dropna() > 0)
+        if three_down and vols_rising:
+            exit_signals.append("3_down_days_rising_volume")
+
         below_10d_ma = current_price < df['sma_10'].iloc[-1]
         volume_rising = df['volume'].iloc[-1] > df['volume_ma'].iloc[-1]
-        if below_10d_ma and volume_rising:
-            exit_signals.append("10d_ma_violation_rising_volume")
-        last_3_days = df.tail(3)
-        three_down = all(last_3_days['close'].diff().dropna() < 0)
-        volumes_rising = all(last_3_days['volume'].diff().dropna() > 0)
-        if three_down and volumes_rising:
-            exit_signals.append("3_down_days_rising_volume")
-        poor_close = (df['close'].iloc[-1] - df['low'].iloc[-1]) / (df['high'].iloc[-1] - df['low'].iloc[-1]) < 0.3
+        poor_close = close_position < 0.3
         if below_10d_ma and volume_rising and poor_close:
             exit_signals.append("poor_close_below_10d_ma")
+
+        # Estimate profit from recent swing low
         assumed_entry = df['low'].tail(30).min()
         profit_pct = (current_price - assumed_entry) / assumed_entry
-        exit_criteria_met = len(exit_signals) >= 3
-        profit_target_reached = profit_pct >= TQQQ_PROFIT_TARGET_PCT
-        if not (exit_criteria_met or profit_target_reached):
+
+        # Trigger exit signal if any primary signal hit, or 3+ secondary signals
+        primary_hit = any(
+            s for s in exit_signals
+            if "21ema_extension" in s or "2_closes_below_21ema_day3_weak" in s or "highly_extended" in s
+        )
+        exit_criteria_met = primary_hit or len(exit_signals) >= 3
+
+        if not exit_criteria_met:
             return None
+
+        # Determine action
+        if "2_closes_below_21ema_day3_weak_EXIT" in exit_signals:
+            action = "BEGIN EXITING — 2 closes below 21 EMA, day 3 weak"
+            trim_pct = "Begin full exit, watch day 3"
+        elif "2_closes_below_21ema_day3_strong_HOLD" in exit_signals:
+            action = "HOLD — 2 closes below 21 EMA but day 3 strong"
+            trim_pct = "Hold position, re-evaluate next close"
+        elif highly_extended:
+            action = "TRIM INTO STRENGTH — highly extended above 21 EMA"
+            trim_pct = "Sell ~10% of position"
+        else:
+            action = "CONSIDER TRIMMING — sell into strength"
+            trim_pct = "Sell ~10% of position on strength"
+
         signal = {
-            "symbol": "TQQQ", "strategy": "tqqq_swing", "signal_type": "sell",
+            "symbol": "TQQQ",
+            "strategy": "tqqq_swing",
+            "signal_type": "sell",
             "timestamp": datetime.datetime.now().isoformat(),
-            "current_price": float(current_price), "exit_signals": exit_signals,
-            "exit_signals_count": len(exit_signals), "profit_pct": float(profit_pct * 100),
-            "distribution_days": int(dist_days), "at_52w_high": bool(at_52w_high),
-            "below_10d_ma": bool(below_10d_ma),
-            "recommendation": "Sell in chunks (10% blocks) as signals trigger",
-            "action": "SELL into strength" if profit_target_reached else "Consider reducing position",
+            "current_price": float(current_price),
+            "ema_21": float(ema_21),
+            "dist_from_21ema_pct": float(dist_from_21ema * 100),
+            "exit_signals": exit_signals,
+            "exit_signals_count": len(exit_signals),
+            "closes_below_21ema": int(closes_below_21ema),
+            "day3_is_weak": bool(day3_is_weak),
+            "day3_is_strong": bool(day3_is_strong),
+            "profit_pct": float(profit_pct * 100),
+            "distribution_days": int(dist_days),
+            "action": action,
+            "trim_recommendation": trim_pct,
+            "note": "Never add to position when already oversized (>50% portfolio). Trim back toward 50% when selling into strength.",
         }
-        print(f"⚠️ TQQQ EXIT: {symbol} @ ${current_price:.2f} | Signals: {len(exit_signals)} | Profit: {profit_pct*100:.1f}%")
+        print(f"⚠️ TQQQ EXIT: {symbol} @ ${current_price:.2f} | 21EMA dist: {dist_from_21ema*100:.1f}% | Signals: {exit_signals} | Profit: {profit_pct*100:.1f}%")
         return signal
     except Exception as e:
         print(f"Error scanning TQQQ for exit: {e}")
@@ -507,182 +664,20 @@ def scan_tqqq_exit_from_df(df: pd.DataFrame) -> Optional[Dict]:
 
 
 async def scan_tqqq_entry(session: aiohttp.ClientSession) -> Optional[Dict]:
-    """
-    Scan for TQQQ entry opportunities.
-    
-    Args:
-        session: aiohttp session
-        
-    Returns:
-        Dict with signal details if entry criteria met, None otherwise
-    """
+    """Async wrapper: fetch TQQQ data then delegate to sync scan_tqqq_entry_from_df."""
     try:
-        symbol = "TQQQ"
-        df = await get_polygon_data(symbol, session)
-        if df is None or len(df) < 100:
-            return None
-        
-        df = df.sort_index()
-        
-        # Calculate moving averages
-        df['sma_50'] = df['close'].rolling(window=50).mean()
-        df['sma_21'] = df['close'].rolling(window=21).mean()
-        df['sma_10'] = df['close'].rolling(window=10).mean()
-        
-        current_price = df['close'].iloc[-1]
-        
-        # Check for pullback (10-15% from recent high)
-        recent_high = df['high'].tail(30).max()
-        pullback_pct = (recent_high - current_price) / recent_high
-        
-        # Check if near moving averages
-        near_50d = abs(current_price - df['sma_50'].iloc[-1]) / df['sma_50'].iloc[-1] < 0.03
-        near_21d = abs(current_price - df['sma_21'].iloc[-1]) / df['sma_21'].iloc[-1] < 0.03
-        
-        # Check for higher highs (sign of resuming uptrend)
-        recent_highs = df['high'].tail(5)
-        making_higher_highs = recent_highs.iloc[-1] > recent_highs.iloc[-3]
-        
-        # Check stage
-        stage = detect_stage(df)
-        
-        # Entry conditions
-        entry_signal = (
-            (TQQQ_MIN_PULLBACK_PCT <= pullback_pct <= TQQQ_MAX_PULLBACK_PCT) and
-            (near_50d or near_21d) and
-            making_higher_highs and
-            stage == 2
-        )
-        
-        if not entry_signal:
-            return None
-        
-        # Stop loss at recent low or just below entry
-        recent_low = df['low'].tail(5).min()
-        stop_loss = recent_low * 0.98  # 2% below recent low
-        
-        signal = {
-            "symbol": "TQQQ",
-            "strategy": "tqqq_swing",
-            "signal_type": "buy",
-            "timestamp": datetime.datetime.now().isoformat(),
-            "entry_price": float(current_price),
-            "stop_loss": float(stop_loss),
-            "pullback_from_high": float(pullback_pct * 100),
-            "recent_high": float(recent_high),
-            "near_50d_ma": bool(near_50d),
-            "near_21d_ma": bool(near_21d),
-            "making_higher_highs": bool(making_higher_highs),
-            "stage": int(stage),
-            "position_sizing": {
-                "initial": f"{TQQQ_INITIAL_POSITION_SIZE*100:.0f}%",
-                "max": f"{TQQQ_MAX_POSITION_SIZE*100:.0f}%",
-                "core": f"{TQQQ_CORE_POSITION_SIZE*100:.0f}%",
-                "recommendation": "Start 25%, can go to 50% (90-100% in Roth)"
-            },
-            "target": f"{TQQQ_PROFIT_TARGET_PCT*100:.0f}% profit",
-            "expected_return": "20-25% swing (typical TQQQ swing range)",
-        }
-        
-        print(f"✅ TQQQ ENTRY: {symbol} @ ${current_price:.2f} | Pullback: {pullback_pct*100:.1f}% | Stage {stage}")
-        return signal
-        
+        df = await get_polygon_data("TQQQ", session)
+        return scan_tqqq_entry_from_df(df)
     except Exception as e:
         print(f"Error scanning TQQQ for entry: {e}")
         return None
 
 
 async def scan_tqqq_exit(session: aiohttp.ClientSession) -> Optional[Dict]:
-    """
-    Scan for TQQQ exit signals using the comprehensive checklist.
-    
-    Args:
-        session: aiohttp session
-        
-    Returns:
-        Dict with signal details if exit criteria met, None otherwise
-    """
+    """Async wrapper: fetch TQQQ data then delegate to sync scan_tqqq_exit_from_df."""
     try:
-        symbol = "TQQQ"
-        df = await get_polygon_data(symbol, session)
-        if df is None or len(df) < 100:
-            return None
-        
-        df = df.sort_index()
-        
-        # Calculate indicators
-        df['sma_10'] = df['close'].rolling(window=10).mean()
-        df['volume_ma'] = df['volume'].rolling(window=50).mean()
-        
-        current_price = df['close'].iloc[-1]
-        
-        # Exit checklist signals
-        exit_signals = []
-        
-        # 1. New 52-week high
-        week_52_high = df['high'].tail(252).max() if len(df) >= 252 else df['high'].max()
-        at_52w_high = current_price >= week_52_high * 0.99
-        if at_52w_high:
-            exit_signals.append("new_52w_high")
-        
-        # 2. Declining volume on new highs
-        if check_volume_on_high(df):
-            exit_signals.append("declining_volume_on_highs")
-        
-        # 3. Distribution days (4-5 in last 25 days)
-        dist_days = count_distribution_days(df, 25)
-        if dist_days >= TQQQ_DISTRIBUTION_DAYS_THRESHOLD:
-            exit_signals.append(f"{dist_days}_distribution_days")
-        
-        # 4. 10-day MA violation
-        below_10d_ma = current_price < df['sma_10'].iloc[-1]
-        volume_rising = df['volume'].iloc[-1] > df['volume_ma'].iloc[-1]
-        if below_10d_ma and volume_rising:
-            exit_signals.append("10d_ma_violation_rising_volume")
-        
-        # 5. Three consecutive down days with rising volume
-        last_3_days = df.tail(3)
-        three_down = all(last_3_days['close'].diff().dropna() < 0)
-        volumes_rising = all(last_3_days['volume'].diff().dropna() > 0)
-        if three_down and volumes_rising:
-            exit_signals.append("3_down_days_rising_volume")
-        
-        # 6. Poor close on rising volume below 10-day MA
-        poor_close = (df['close'].iloc[-1] - df['low'].iloc[-1]) / (df['high'].iloc[-1] - df['low'].iloc[-1]) < 0.3
-        if below_10d_ma and volume_rising and poor_close:
-            exit_signals.append("poor_close_below_10d_ma")
-        
-        # Calculate profit since typical entry (simplified)
-        # Assume entry was at a recent support level
-        assumed_entry = df['low'].tail(30).min()
-        profit_pct = (current_price - assumed_entry) / assumed_entry
-        
-        # Exit signal if multiple criteria met or if profit target reached
-        exit_criteria_met = len(exit_signals) >= 3
-        profit_target_reached = profit_pct >= TQQQ_PROFIT_TARGET_PCT
-        
-        if not (exit_criteria_met or profit_target_reached):
-            return None
-        
-        signal = {
-            "symbol": "TQQQ",
-            "strategy": "tqqq_swing",
-            "signal_type": "sell",
-            "timestamp": datetime.datetime.now().isoformat(),
-            "current_price": float(current_price),
-            "exit_signals": exit_signals,
-            "exit_signals_count": len(exit_signals),
-            "profit_pct": float(profit_pct * 100),
-            "distribution_days": int(dist_days),
-            "at_52w_high": bool(at_52w_high),
-            "below_10d_ma": bool(below_10d_ma),
-            "recommendation": "Sell in chunks (10% blocks) as signals trigger",
-            "action": "SELL into strength" if profit_target_reached else "Consider reducing position",
-        }
-        
-        print(f"⚠️ TQQQ EXIT: {symbol} @ ${current_price:.2f} | Signals: {len(exit_signals)} | Profit: {profit_pct*100:.1f}%")
-        return signal
-        
+        df = await get_polygon_data("TQQQ", session)
+        return scan_tqqq_exit_from_df(df)
     except Exception as e:
         print(f"Error scanning TQQQ for exit: {e}")
         return None

@@ -67,6 +67,9 @@ async def root():
                 "status": "/market_data/status",
                 "ticker": "/market_data/ticker/{symbol}",
                 "fetch": "/market_data/fetch (POST)"
+            },
+            "market_pulse": {
+                "snapshot": "/market-pulse"
             }
         }
     }
@@ -936,6 +939,41 @@ async def trigger_market_data_fetch():
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/market-pulse", tags=["Market Pulse"])
+def market_pulse():
+    """
+    Live market snapshot for 8 macro instruments.
+
+    Returns the latest price, OHLCV, daily change, and change % for:
+      - S&P 500 (via SPY ETF)
+      - NASDAQ 100 (via QQQ ETF)
+      - Dow 30 (via DIA ETF)
+      - Russell 2000 (via IWM ETF)
+      - VIX / Volatility (via VXX ETP proxy — VIX futures, not spot)
+      - Gold (via GLD ETF)
+      - Bitcoin (via X:BTCUSD — Polygon crypto)
+      - Crude Oil (via USO ETF)
+
+    Data is refreshed every minute by the fetch_market_pulse Celery task
+    and cached in Redis (TTL 5 min).  Reads are sub-millisecond — safe to
+    poll every 10-30 seconds from the frontend.
+
+    Note on VIX: VXX tracks VIX futures (not the spot VIX index).
+    To get the actual VIX index, upgrade to the Polygon Indices add-on.
+
+    Returns:
+        dict: {
+            "data": [...],          # List of instrument snapshots
+            "last_updated": "...",  # UTC ISO timestamp of most recent fetch
+            "count": 8,
+            "stale": true           # Only present when Redis cache is empty
+        }
+    """
+    from aignitequant.app.services.market_pulse import get_market_pulse
+
+    return get_market_pulse()
+
+
 @router.get("/fear_greed")
 def fear_greed_index():
     """
@@ -1230,3 +1268,42 @@ async def trigger_intraday_fetch():
     stats = await fetch_intraday_data(batch_size=5, delay=1.0)
     return {"status": "success", **stats}
 
+mary", tags=["Intraday"])
+def get_intraday_ticker_summary(
+    symbol: str,
+    date: Optional[str] = Query(None, description="Date YYYY-MM-DD (defaults to today ET)"),
+):
+    """
+    Quick summary of intraday data for a ticker -- bar counts per session,
+    latest price, total volume, day high/low.
+    """
+    import datetime as dt
+    from aignitequant.app.services.intraday_data import get_intraday_summary
+
+    trade_date = None
+    if date:
+        try:
+            trade_date = dt.datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+
+    summary = get_intraday_summary(symbol.upper(), date=trade_date)
+    if summary is None:
+        return {"status": "no_data", "symbol": symbol.upper()}
+
+    return {"status": "success", **summary}
+
+
+@router.post("/intraday/fetch", tags=["Intraday"])
+async def trigger_intraday_fetch():
+    """
+    Manually trigger an intraday data fetch for all S&P 500 tickers.
+    Pulls 10-minute bars for today from Polygon.io.
+    This runs synchronously and may take 2-5 minutes.
+    """
+    from aignitequant.app.services.intraday_data import fetch_intraday_data
+
+    stats = await fetch_intraday_data(batch_size=5, delay=1.0)
+    return {"status": "success", **stats}
+elay=1.0)
+    return {"status": "success", **stats}
