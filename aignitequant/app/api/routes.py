@@ -1028,6 +1028,23 @@ def market_pulse_debug():
     }
 
 
+@router.post("/market-pulse/refresh", tags=["Market Pulse"])
+async def market_pulse_refresh():
+    """
+    Manually trigger a market pulse fetch and cache to Redis.
+    Returns the fetch stats plus the resulting cached data (or error detail).
+    Useful for diagnosing why the cache is empty after deploy.
+    """
+    import traceback
+    try:
+        from aignitequant.app.services.market_pulse import fetch_and_store_market_pulse, get_market_pulse
+        stats = await fetch_and_store_market_pulse()
+        snapshot = get_market_pulse()
+        return {"status": "ok", "stats": stats, "snapshot_count": snapshot.get("count"), "stale": snapshot.get("stale", False)}
+    except Exception as e:
+        return {"status": "error", "error": str(e), "traceback": traceback.format_exc()}
+
+
 @router.get("/fear_greed")
 def fear_greed_index():
     """
