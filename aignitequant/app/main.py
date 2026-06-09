@@ -13,13 +13,17 @@ async def lifespan(app: FastAPI):
     # Startup: immediately populate Redis so /market-pulse never
     # returns stale:true right after a cold deploy.
     # Celery Beat takes over every 30 seconds after this first fetch.
-    try:
-        from aignitequant.app.services.market_pulse import fetch_and_store_market_pulse
-        print("Startup: fetching initial market pulse data...")
-        stats = await fetch_and_store_market_pulse()
-        print(f"Startup market pulse complete: {stats}")
-    except Exception as e:
-        print(f"WARNING: Startup market pulse fetch failed (non-fatal): {e}")
+    for attempt in range(1, 4):
+        try:
+            from aignitequant.app.services.market_pulse import fetch_and_store_market_pulse
+            print(f"Startup: fetching initial market pulse data (attempt {attempt}/3)...")
+            stats = await fetch_and_store_market_pulse()
+            print(f"Startup market pulse complete: {stats}")
+            break
+        except Exception as e:
+            print(f"WARNING: Startup market pulse attempt {attempt} failed: {e}")
+            if attempt < 3:
+                await asyncio.sleep(3)
 
     yield  # app is running
 
