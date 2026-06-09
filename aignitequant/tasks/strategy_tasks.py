@@ -200,24 +200,18 @@ def run_stage2():
     """
     Execute Stage 2 trend analysis
     """
-    from aignitequant.app.strategies.stage2 import check_trend_template
-    from aignitequant.app.services.sp500 import get_sp500_tickers
-    
+    import asyncio
+    from aignitequant.app.strategies.stage2 import run_and_store_stage2
+
     now = datetime.datetime.now(EASTERN)
     print(f"[Celery] Running Stage 2 analysis at {now}")
-    
+
     try:
-        tickers = get_sp500_tickers()
-        # Process Stage 2 for all tickers
-        results = []
-        for ticker in tickers:
-            result = check_trend_template(ticker)
-            if result:
-                results.append(result)
-        
-        print(f"[Celery] Stage 2 completed: found {len(results)} candidates")
-        return {"status": "success", "candidates": len(results), "timestamp": now.isoformat()}
-    
+        qualified = asyncio.run(run_and_store_stage2())
+        count = len(qualified) if qualified else 0
+        print(f"[Celery] Stage 2 completed: found {count} candidates")
+        return {"status": "success", "candidates": count, "timestamp": now.isoformat()}
+
     except Exception as e:
         print(f"[Celery][ERROR] {str(e)}")
         return {"status": "error", "error": str(e)}

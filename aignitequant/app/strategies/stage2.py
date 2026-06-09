@@ -147,6 +147,146 @@ async def check_trend_template(ticker, spy_data=None):
         
         return True
 
+def screen_stage2_from_df(ticker: str, df: pd.DataFrame, spy_df: pd.DataFrame) -> dict | None:
+    """
+    Synchronous Stage 2 screen using pre-loaded DataFrames.
+    Returns a result dict if the ticker qualifies, None otherwise.
+    """
+    try:
+        if df is None or df.empty or len(df) < 200:
+            return None
+
+        df = df.copy()
+        df["50_MA"] = df["close"].rolling(50).mean()
+        df["150_MA"] = df["close"].rolling(150).mean()
+        df["200_MA"] = df["close"].rolling(200).mean()
+        df = df.dropna(subset=["50_MA", "150_MA", "200_MA"])
+        if len(df) < 5:
+            return None
+
+        latest = df.iloc[-1]
+        price = latest["close"]
+
+        # Criteria 1-7
+        if not (price > latest["150_MA"] and price > latest["200_MA"]):
+            return None
+        if not (latest["150_MA"] > latest["200_MA"]):
+            return None
+        if not (df["200_MA"].iloc[-1] > df["200_MA"].iloc[-5]):
+            return None
+        if not (latest["50_MA"] > latest["150_MA"] and latest["50_MA"] > latest["200_MA"]):
+            return None
+        if not (price > latest["50_MA"]):
+            return None
+
+        low_52w = df["close"].tail(252).min()
+        high_52w = df["close"].tail(252).max()
+        if not (price >= 1.3 * low_52w):
+            return None
+        if not (price >= 0.75 * high_52w):
+            return None
+
+        # Criteria 8: RS vs SPY
+        rs_rating = 0
+        if spy_df is not None and not spy_df.empty and len(df) >= 252 and len(spy_df) >= 252:
+            aligned_spy = spy_df.reindex(df.index, method="ffill")
+            rs_rating = calculate_relative_strength(df["close"], aligned_spy["close"])
+        if rs_rating < 60:
+            return None
+
+        pct_from_high = round((price / high_52w - 1) * 100, 2)
+        pct_from_low = round((price / low_52w - 1) * 100, 2)
+
+        return {
+            "symbol": ticker,
+            "price": round(price, 2),
+            "ma50": round(latest["50_MA"], 2),
+            "ma150": round(latest["150_MA"], 2),
+            "ma200": round(latest["200_MA"], 2),
+            "rs_rating": round(rs_rating, 1),
+            "52w_high": round(high_52w, 2),
+            "52w_low": round(low_52w, 2),
+            "pct_from_high": pct_from_high,
+            "pct_from_low": pct_from_low,
+        }
+    except Exception as e:
+        print(f"[Stage2] Error screening {ticker}: {e}")
+        return None
+
+
+async def run_and_store_stage2():
+    """
+    Runs Stage 2 screen against all S&P 500 tickers and stores results in the database.
+    Uses DB batch read for speed; falls back to Polygon API for missing tickers.
+    """
+    from app.services.market_data import get_dataframe_from_db, get_multiple_dataframes_from_db
+    import time
+
+    print("🚀 Stage 2 Strategy - S&P 500 Scanner")
+    print("=" * 60)
+
+    tickers = await get_sp500_tickers()
+    print(f"✅ Got {len(tickers)} tickers to scan")
+
+    # Batch read from DB (includes SPY)
+    all_tickers = tickers + ["SPY"]
+    t0 = time.time()
+    dfs = get_multiple_dataframes_from_db(all_tickers)
+    db_hits = sum(1 for v in dfs.values() if v is not None and not v.empty)
+    print(f"📂 DB batch read: {db_hits}/{len(all_tickers)} tickers in {time.time()-t0:.2f}s")
+
+    spy_df = dfs.get("SPY")
+    qualified = []
+    api_fallback = []
+
+    for ticker in tickers:
+        df = dfs.get(ticker)
+        if df is not None and not df.empty:
+            result = screen_stage2_from_df(ticker, df, spy_df)
+            if result:
+                qualified.append(result)
+        else:
+            api_fallback.append(ticker)
+
+    # API fallback for missing tickers
+    if api_fallback:
+        print(f"🌐 API fallback for {len(api_fallback)} tickers...")
+        async with aiohttp.ClientSession() as session:
+            if spy_df is None:
+                spy_df = await get_polygon_data("SPY", session)
+            tasks = [check_trend_template(t, spy_df) for t in api_fallback]
+            results = await asyncio.gather(*tasks)
+            # check_trend_template returns True/False; re-screen with basic data
+            for ticker, passed in zip(api_fallback, results):
+                if passed:
+                    qualified.append({"symbol": ticker, "criteria": "Stage2"})
+
+    now = datetime.datetime.now()
+    today = now.date()
+    time_now = now.time().replace(microsecond=0)
+
+    db = SessionLocal()
+    try:
+        for item in qualified:
+            entry = Stage2Data(
+                symbol=item["symbol"],
+                data_date=today,
+                data_time=time_now,
+                data_json=json.dumps(item),
+            )
+            db.add(entry)
+        db.commit()
+        print(f"💾 Saved {len(qualified)} Stage 2 candidates to DB")
+    except Exception as e:
+        db.rollback()
+        print(f"[Stage2] DB error: {e}")
+        raise
+    finally:
+        db.close()
+
+    return qualified
+
+
 # --- Script entry point for command-line use ---
 if __name__ == "__main__":
     import sys
