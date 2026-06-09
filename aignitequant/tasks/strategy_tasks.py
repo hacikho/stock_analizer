@@ -178,16 +178,18 @@ def run_golden_cross():
     """
     Execute Golden Cross strategy
     """
-    from aignitequant.app.strategies.golden_cross_strategy import golden_cross_strategy
-    
+    import asyncio
+    from aignitequant.app.strategies.golden_cross_strategy import run_and_store_golden_cross
+
     now = datetime.datetime.now(EASTERN)
     print(f"[Celery] Running Golden Cross strategy at {now}")
-    
+
     try:
-        results = golden_cross_strategy()
-        print(f"[Celery] Golden Cross completed: found {len(results)} signals")
-        return {"status": "success", "signals": len(results), "timestamp": now.isoformat()}
-    
+        picks = asyncio.run(run_and_store_golden_cross())
+        count = len(picks) if picks else 0
+        print(f"[Celery] Golden Cross completed: found {count} signals")
+        return {"status": "success", "signals": count, "timestamp": now.isoformat()}
+
     except Exception as e:
         print(f"[Celery][ERROR] {str(e)}")
         return {"status": "error", "error": str(e)}
