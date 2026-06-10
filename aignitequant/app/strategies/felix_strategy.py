@@ -4,11 +4,11 @@ Felix Strategy – Institutional 50-SMA Breakout Scanner
 Scans S&P 500 stocks for institutional-quality buying signals by detecting:
 
 1. **Stock was trading BELOW the 50-day SMA for a sustained period** – at least
-   10 of the prior 15 trading days must have closed below the 50-SMA.  This
+   10 of the prior 20 trading days must have closed below the 50-SMA.  This
    eliminates stocks that are already riding above the MA (continuation, not
    a fresh breakout) and focuses only on true reclaims.
 
-2. **Price then crossed above the 50-day SMA** in the last 3 trading days.
+2. **Price then crossed above the 50-day SMA** in the last 5 trading days.
 
 3. **The 50-SMA is curving upward** (positive acceleration – the slope itself
    is increasing), confirming the trend is strengthening.
@@ -272,12 +272,8 @@ def _check_sma_curving_up(df: pd.DataFrame, cross_idx: int) -> Tuple[bool, Dict]
         # The MA has already started rising.  Pass.
         return True, details
 
-    # Neither condition met – the MA is still falling and accelerating down
-    # or flat/decelerating.  Reject.
-    if accel <= 0:
-        details["reason"] = "ma_not_curving_up"
-    else:
-        details["reason"] = "slope_too_negative"
+    # Neither condition met – the MA is still falling and not curving up.  Reject.
+    details["reason"] = "ma_not_curving_up"
     return False, details
 
 
@@ -351,17 +347,29 @@ def _rate_institutional_strength(vol_ratio: float, slope: float, accel: float) -
 def _rate_signal_quality(vol_ratio: float, slope: float, accel: float) -> int:
     """
     Numeric signal quality score (0-100).
+
+    Trend component combines slope AND acceleration so that the core Felix
+    thesis — negative slope with strong positive acceleration (MA bending up
+    before it has fully turned) — is rewarded, not penalised.
+
+    Breakdown:
+      • Volume     0-40 pts  (primary confirmation of institutional demand)
+      • Trend      0-60 pts  (split: 30 pts acceleration + 30 pts slope)
+        - Acceleration is weighted equally to slope because a bending-up MA
+          at a crossover is as meaningful as a slope that has already turned.
+        - Slope can be negative; it contributes 0 pts but does NOT subtract.
     """
     # Volume component (0-40)
     vol_score = min(40, (vol_ratio / VOLUME_SPIKE_IDEAL) * 40)
 
-    # Slope component (0-30)
+    # Acceleration component (0-30) — primary trend signal for Felix setups
+    # Maps accel from [-0.1, +0.2] → [0, 30]; negative accel scores 0.
+    accel_score = min(30, max(0, (accel + 0.1) / 0.3) * 30)
+
+    # Slope component (0-30) — secondary; 0 for negative slope (not penalised)
     slope_score = min(30, max(0, slope / 0.5) * 30)
 
-    # Acceleration component (0-30)
-    accel_score = min(30, max(0, (accel + 0.1) / 0.2) * 30)
-
-    return int(round(vol_score + slope_score + accel_score))
+    return int(round(vol_score + accel_score + slope_score))
 
 
 # ==================== SCANNING ====================
