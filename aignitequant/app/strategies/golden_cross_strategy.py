@@ -61,15 +61,20 @@ def detect_golden_cross(df: pd.DataFrame, ticker: str = "") -> dict:
         return {"detected": False}
 
     # Detect crossover: MA50 crosses above MA200
-    # Previous day: MA50 < MA200 (strictly below, not equal)
-    # Current day: MA50 > MA200
-    # Add a minimum separation threshold to avoid noise (0.5% difference)
-    df["MA50_below_prev"] = df["MA50"].shift(1) < df["MA200"].shift(1)
+    # Requires MA50 to have been BELOW MA200 for the past 5 trading days (sustained downtrend),
+    # then crosses ABOVE MA200 today with at least 0.5% separation.
+    # Checking only 1 day back causes false positives when MAs are tangled close together —
+    # a single-day dip below the 200MA would fire the signal even though TradingView shows no visible cross.
+    LOOKBACK_DAYS = 5
+    ma50_was_below = pd.Series(True, index=df.index)
+    for i in range(1, LOOKBACK_DAYS + 1):
+        ma50_was_below &= df["MA50"].shift(i) < df["MA200"].shift(i)
+
     df["MA50_above_now"] = df["MA50"] > df["MA200"]
     df["Separation"] = ((df["MA50"] - df["MA200"]) / df["MA200"] * 100)  # Percentage
-    
-    # Golden cross: was below, now above, with meaningful separation
-    df["Golden_Cross"] = df["MA50_below_prev"] & df["MA50_above_now"] & (df["Separation"] > 0.1)
+
+    # Golden cross: MA50 was clearly below MA200 for the past 5 days, now above with meaningful separation
+    df["Golden_Cross"] = ma50_was_below & df["MA50_above_now"] & (df["Separation"] > 0.5)
 
     # Check for golden cross in the last 7 trading days (not calendar days)
     last_7_trading_days = df.tail(7)
