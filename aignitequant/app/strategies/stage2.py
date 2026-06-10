@@ -45,11 +45,14 @@ load_dotenv()
 
 def calculate_relative_strength(stock_prices, spy_prices, period=252):
     """
-    Calculate Relative Strength vs S&P 500 (SPY) over the specified period.
-    Returns a value between 0-100, where >70 indicates strong outperformance.
-    
-    Formula: Compares stock performance vs SPY performance over the period,
-    then normalizes to 0-100 scale where 70+ indicates significant outperformance.
+    Calculate a Relative Strength proxy vs S&P 500 (SPY) over the specified period.
+    Returns a value between 0-100, where ≥70 indicates strong outperformance.
+
+    NOTE: This is NOT the IBD Relative Strength Rating (which ranks a stock's
+    12-month performance against all other stocks as a 1-99 percentile). This is
+    a custom proxy that compares the stock's % return vs SPY's % return over the
+    period and normalizes the ratio to a 0-100 scale. Results are directionally
+    similar but not equivalent to IBD RS — treat the 70 threshold as approximate.
     """
     if len(stock_prices) < period or len(spy_prices) < period:
         return 0
@@ -119,8 +122,8 @@ async def check_trend_template(ticker, spy_data=None):
         if not (latest['150_MA'] > latest['200_MA']):
             return False
         
-        # 3. 200-day SMA trending up (current > 5 days ago)
-        if len(hist) < 5 or not (hist['200_MA'].iloc[-1] > hist['200_MA'].iloc[-5]):
+        # 3. 200-day SMA trending up (current > ~1 month ago, i.e. 20 trading days)
+        if len(hist) < 20 or not (hist['200_MA'].iloc[-1] > hist['200_MA'].iloc[-20]):
             return False
         
         # 4. 50-day SMA above both 150-day and 200-day SMAs
@@ -132,17 +135,17 @@ async def check_trend_template(ticker, spy_data=None):
             return False
         
         # 6. Current price at least 30% above 52-week low
-        min_52_week = hist['close'].min()
+        min_52_week = hist['close'].tail(252).min()
         if not (latest['close'] >= 1.3 * min_52_week):
             return False
-        
+
         # 7. Current price within 25% of 52-week high
-        max_52_week = hist['close'].max()
+        max_52_week = hist['close'].tail(252).max()
         if not (latest['close'] >= 0.75 * max_52_week):
             return False
         
         # 8. NEW: Relative Strength vs S&P 500 ≥ 70
-        if rs_rating < 60:
+        if rs_rating < 70:
             return False
         
         return True
@@ -172,7 +175,7 @@ def screen_stage2_from_df(ticker: str, df: pd.DataFrame, spy_df: pd.DataFrame) -
             return None
         if not (latest["150_MA"] > latest["200_MA"]):
             return None
-        if not (df["200_MA"].iloc[-1] > df["200_MA"].iloc[-5]):
+        if not (df["200_MA"].iloc[-1] > df["200_MA"].iloc[-20]):
             return None
         if not (latest["50_MA"] > latest["150_MA"] and latest["50_MA"] > latest["200_MA"]):
             return None
@@ -191,7 +194,7 @@ def screen_stage2_from_df(ticker: str, df: pd.DataFrame, spy_df: pd.DataFrame) -
         if spy_df is not None and not spy_df.empty and len(df) >= 252 and len(spy_df) >= 252:
             aligned_spy = spy_df.reindex(df.index, method="ffill")
             rs_rating = calculate_relative_strength(df["close"], aligned_spy["close"])
-        if rs_rating < 60:
+        if rs_rating < 70:
             return None
 
         pct_from_high = round((price / high_52w - 1) * 100, 2)
