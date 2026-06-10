@@ -28,6 +28,7 @@ from aignitequant.app.services.polygon import get_polygon_data
 from aignitequant.app.services.sp500 import get_sp500_tickers, get_sector_map
 from aignitequant.app.db import SessionLocal, VCPData
 from aignitequant.app.services.market_data import get_dataframe_from_db, get_multiple_dataframes_from_db
+from aignitequant.app.strategies.stage2 import screen_stage2_from_df
 
 # ---------- PARAMETERS ---------- 
 # Adjusted to be more realistic for actual market conditions
@@ -167,8 +168,8 @@ def in_strong_uptrend(df, as_of=-1, debug=False):
     uptrend_4month = pct_gain_120 >= MIN_UPTREND_PCT
     uptrend_1year = pct_gain_252 >= (MIN_UPTREND_PCT * 2)  # 40%+ over 1 year is strong
     
-    # Stock should be above key MAs and show uptrend in at least one timeframe
-    uptrend_ok = (uptrend_4month or uptrend_1year) and above_ma150 and above_ma200
+    # Stock must be above all key MAs, MAs in proper order, and show uptrend in at least one timeframe
+    uptrend_ok = (uptrend_4month or uptrend_1year) and above_ma50 and above_ma150 and above_ma200 and ma_trending_up
     
     if debug:
         print(f"   📈 4-month gain: {pct_gain_120*100:.1f}% (need {MIN_UPTREND_PCT*100:.0f}%+) - {'✅' if uptrend_4month else '❌'}")
@@ -308,13 +309,18 @@ def breakout_signal(df, start, end):
             }
     return None
 
-async def scan_symbol_for_vcp(symbol, debug=False):
-    """Scan a symbol for VCP pattern using Polygon API data."""
+async def scan_symbol_for_vcp(symbol, spy_df=None, debug=False):
+    """Scan a symbol for VCP pattern using Polygon API data.
+
+    Runs Stage 2 Trend Template as a pre-filter before VCP checks.
+    Pass spy_df (lowercase-column DataFrame) to enable the RS gate;
+    without it the RS criterion is skipped (rs_rating defaults to 0 → fails).
+    """
     if debug:
         print(f"\n🔍 Analyzing {symbol} for VCP pattern...")
-    
+
     df = await get_data(symbol)
-    
+
     if df is None:
         if debug:
             print(f"   ❌ No data available for {symbol}")
@@ -324,6 +330,19 @@ async def scan_symbol_for_vcp(symbol, debug=False):
         print(f"   📊 Data available: {len(df)} days")
         print(f"   📊 Price range: ${df['Close'].min():.2f} - ${df['Close'].max():.2f}")
         print(f"   📊 Current price: ${df['Close'].iloc[-1]:.2f}")
+
+    # --- Stage 2 gate: needs lowercase df; get_data returns Title-case, so convert temporarily ---
+    df_lower = df.rename(columns={"Open": "open", "High": "high",
+                                   "Low": "low", "Close": "close",
+                                   "Volume": "volume"})
+    stage2_result = screen_stage2_from_df(symbol, df_lower, spy_df)
+    if stage2_result is None:
+        if debug:
+            print(f"   ❌ Failed Stage 2 trend filter")
+        return {"symbol": symbol, "VCP": False, "reason": "Failed Stage 2 trend filter"}
+
+    if debug:
+        print(f"   ✅ Passed Stage 2 trend filter")
 
     if not in_strong_uptrend(df, debug=debug):
         return {"symbol": symbol, "VCP": False, "reason": "No strong uptrend"}
@@ -369,22 +388,23 @@ async def scan_symbol_for_vcp(symbol, debug=False):
         "breakout_info": breakout
     }
 
-async def scan_multiple_symbols(symbols, batch_size=5, delay=1.0):
+async def scan_multiple_symbols(symbols, batch_size=5, delay=1.0, spy_df=None):
     """
     Scan multiple symbols for VCP patterns concurrently with rate limiting.
-    
+
     Args:
         symbols: List of ticker symbols to scan
         batch_size: Number of concurrent requests per batch
         delay: Delay between batches to respect API rate limits
+        spy_df: Optional SPY DataFrame (lowercase columns) for Stage 2 RS gate
     """
     results = []
-    
+
     for i in range(0, len(symbols), batch_size):
         batch = symbols[i:i+batch_size]
         print(f"Processing batch {i//batch_size + 1}: {batch}")
-        
-        tasks = [scan_symbol_for_vcp(symbol) for symbol in batch]
+
+        tasks = [scan_symbol_for_vcp(symbol, spy_df=spy_df) for symbol in batch]
         batch_results = await asyncio.gather(*tasks, return_exceptions=True)
         
         for symbol, result in zip(batch, batch_results):
@@ -462,14 +482,25 @@ async def list_sp500_sectors():
     
     return list(sector_map.keys())
 
-def scan_symbol_from_df(symbol: str, df: pd.DataFrame) -> dict:
+def scan_symbol_from_df(symbol: str, df: pd.DataFrame, spy_df: pd.DataFrame = None) -> dict:
     """
     Synchronous VCP screen using a pre-loaded DataFrame.
     Avoids re-fetching from DB/API when data is already in memory.
+
+    Runs Mark Minervini's Stage 2 Trend Template as a pre-filter before
+    checking for the VCP pattern — a stock must be in a Stage 2 uptrend
+    before a VCP setup is valid.
     """
     try:
         if df is None or df.empty:
             return {"symbol": symbol, "VCP": False, "reason": "No data available"}
+        if len(df) < 200:
+            return {"symbol": symbol, "VCP": False, "reason": f"Insufficient data ({len(df)} days)"}
+
+        # --- Stage 2 gate (uses lowercase column names as returned by DB) ---
+        stage2_result = screen_stage2_from_df(symbol, df, spy_df)
+        if stage2_result is None:
+            return {"symbol": symbol, "VCP": False, "reason": "Failed Stage 2 trend filter"}
 
         # VCP uses capitalised column names; rename if needed
         if "close" in df.columns and "Close" not in df.columns:
@@ -522,11 +553,13 @@ async def scan_sp500_for_vcp(batch_size=10, delay=2.0):
     sp500_tickers = await get_sp500_tickers()
     print(f"Got {len(sp500_tickers)} S&P 500 tickers")
 
-    # Batch read from DB — use the data directly instead of discarding it
+    # Batch read from DB — include SPY for Stage 2 RS gate
     t0 = time.time()
-    dfs = get_multiple_dataframes_from_db(sp500_tickers)
+    dfs = get_multiple_dataframes_from_db(sp500_tickers + ["SPY"])
     db_hits = sum(1 for v in dfs.values() if v is not None and not v.empty)
-    print(f"DB batch read: {db_hits}/{len(sp500_tickers)} tickers in {time.time()-t0:.2f}s")
+    print(f"DB batch read: {db_hits}/{len(sp500_tickers) + 1} tickers in {time.time()-t0:.2f}s")
+
+    spy_df = dfs.get("SPY")
 
     results = []
     api_fallback = []
@@ -534,14 +567,14 @@ async def scan_sp500_for_vcp(batch_size=10, delay=2.0):
     for ticker in sp500_tickers:
         df = dfs.get(ticker)
         if df is not None and not df.empty:
-            results.append(scan_symbol_from_df(ticker, df))
+            results.append(scan_symbol_from_df(ticker, df, spy_df))
         else:
             api_fallback.append(ticker)
 
     # API fallback for tickers missing from DB
     if api_fallback:
         print(f"🌐 API fallback for {len(api_fallback)} tickers...")
-        api_results = await scan_multiple_symbols(api_fallback, batch_size=batch_size, delay=delay)
+        api_results = await scan_multiple_symbols(api_fallback, batch_size=batch_size, delay=delay, spy_df=spy_df)
         results.extend(api_results)
 
     return results
