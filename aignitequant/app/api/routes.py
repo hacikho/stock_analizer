@@ -149,6 +149,8 @@ async def root():
                 "vcp": "/vcp_db",
                 "earnings_quality": "/earnings_quality_db",
                 "felix": "/felix_db",
+                "vibia_hybrid": "/vibia_hybrid_db",
+                "marios_swing": "/marios_swing_db",
                 "options": "/options_signals",
                 "fear_greed": "/fear_greed"
             },
@@ -677,6 +679,178 @@ def get_ticker_data(symbol: str, days: int = Query(default=30, ge=1, le=730)):
         "count": len(records),
         "data": records,
     }
+
+
+@router.get("/vibia_hybrid_db", tags=["Vibia Hybrid"])
+def get_vibia_hybrid_db():
+    """
+    Get Vibia J. Hybrid Strategy Results from Database
+
+    Vibia J. is a top performer in the US Investing Championship. Her hybrid system
+    combines two complementary approaches:
+
+    1. **CANSLIM Individual Stocks** — screens for market leaders with 25%+ quarterly
+       earnings/sales growth, EPS+RS ratings ≥95, forming proper bases in Stage 1/2.
+       Position sizing: 10% initial, up to 15% max, 6-8 stocks total.
+
+    2. **TQQQ Swing Trading** — when individual setups are scarce or the market is choppy,
+       pivots to TQQQ. Entry: Nasdaq pulls back 5-8%, then wait for 3 consecutive up days
+       near the 21 EMA. Exit: partial trim when 10-15%+ extended above 21 EMA with downside
+       reversal, or 2 closes below 21 EMA (check day 3 before full exit).
+
+    Response structure:
+    - `market_assessment`: current recommendation (individual_stocks / tqqq_or_cash /
+      tqqq_early_entry / flexible) with distribution day count and market stage
+    - `canslim_stocks`: list of CANSLIM buy signals sorted by 90-day return
+    - `tqqq_entry`: TQQQ buy signal if 3 up days off pullback (or null)
+    - `tqqq_exit`: TQQQ sell/trim signal if extension or 21 EMA break (or null)
+
+    Data Source: Pre-calculated by scheduled Celery task every 15 min during market hours.
+    """
+    import json as _json
+    session: Session = SessionLocal()
+    try:
+        # Find most recent batch regardless of date (fallback pattern)
+        latest = (
+            session.query(VibiaHybridData.data_date, VibiaHybridData.data_time)
+            .order_by(VibiaHybridData.data_date.desc(), VibiaHybridData.data_time.desc())
+            .first()
+        )
+        if not latest:
+            return {"error": "No Vibia Hybrid data available"}
+
+        data_date, data_time = latest
+
+        rows = (
+            session.query(VibiaHybridData)
+            .filter(
+                VibiaHybridData.data_date == data_date,
+                VibiaHybridData.data_time == data_time,
+            )
+            .all()
+        )
+
+        canslim_stocks = []
+        tqqq_entry = None
+        tqqq_exit = None
+        market_assessment = None
+
+        for row in rows:
+            data = _json.loads(row.data_json)
+            if row.strategy == "canslim_stock":
+                canslim_stocks.append(data)
+            elif row.strategy == "tqqq_swing" and row.signal_type == "buy":
+                tqqq_entry = data
+            elif row.strategy == "tqqq_swing" and row.signal_type == "sell":
+                tqqq_exit = data
+            elif row.strategy == "market_assessment":
+                market_assessment = data
+
+        # Sort CANSLIM signals by 90-day return (strongest leaders first)
+        canslim_stocks.sort(key=lambda x: x.get("returns_90d", 0), reverse=True)
+
+        return {
+            "date": str(data_date),
+            "time": str(data_time),
+            "last_updated": format_last_updated(data_date, data_time),
+            "market_assessment": market_assessment,
+            "canslim_stocks": canslim_stocks,
+            "canslim_count": len(canslim_stocks),
+            "tqqq_entry": tqqq_entry,
+            "tqqq_exit": tqqq_exit,
+        }
+    finally:
+        session.close()
+
+
+@router.get("/marios_swing_db", tags=["Marios Swing"])
+def get_marios_swing_db():
+    """
+    Get Marios Stamatoudis Swing Trading Strategy Results from Database
+
+    Marios Stamatoudis is the 2023 US Investing Champion (291% return). His strategy
+    covers three distinct swing setups, each with different risk profiles:
+
+    1. **Classic Breakout** — stock makes a 30-100% prior move, then consolidates
+       2 weeks–2 months with higher lows and a tightening range (<15%). Entry on
+       trendline breakout; stop at breakout day's low; first target 2.75× ADR.
+       Signals include `consolidation_lows_slope` and `rs_vs_spy_63d` (excess return
+       vs SPY over 63 days — must be positive to pass the filter).
+
+    2. **Episodic Pivot** — "sleepy stock" that was down 20%+ gaps up ≥5% on a
+       fundamental catalyst with relative volume ≥1.5×. Entry at opening range high;
+       stop at day's low. Note: `gap_detected: true` does NOT confirm a catalyst —
+       always verify manually (see `catalyst_note`).
+
+    3. **Parabolic Short** ⚠️ — stock made 100-400% parabolic move, RSI rolling over
+       from overbought, close in lower third of day's range. **DAILY-BAR APPROXIMATION
+       ONLY** — Marios' real entry triggers are intraday (ORB break / VWAP failure).
+       Use these as watchlist candidates; confirm with `/intraday/{symbol}` before trading.
+
+    Signals are sorted by risk/reward ratio descending within each category.
+
+    Data Source: Pre-calculated by scheduled Celery task every 15 min during market hours.
+    """
+    import json as _json
+    session: Session = SessionLocal()
+    try:
+        latest = (
+            session.query(SwingTradeData.data_date, SwingTradeData.data_time)
+            .order_by(SwingTradeData.data_date.desc(), SwingTradeData.data_time.desc())
+            .first()
+        )
+        if not latest:
+            return {"error": "No Marios Swing data available"}
+
+        data_date, data_time = latest
+
+        rows = (
+            session.query(SwingTradeData)
+            .filter(
+                SwingTradeData.data_date == data_date,
+                SwingTradeData.data_time == data_time,
+            )
+            .all()
+        )
+
+        classic_breakouts = []
+        episodic_pivots = []
+        parabolic_shorts = []
+
+        for row in rows:
+            data = _json.loads(row.data_json)
+            if row.strategy == "classic_breakout":
+                classic_breakouts.append(data)
+            elif row.strategy == "episodic_pivot":
+                episodic_pivots.append(data)
+            elif row.strategy == "parabolic_short":
+                parabolic_shorts.append(data)
+
+        # Sort each category by risk/reward descending
+        for lst in [classic_breakouts, episodic_pivots, parabolic_shorts]:
+            lst.sort(key=lambda x: x.get("risk_reward", 0), reverse=True)
+
+        total = len(classic_breakouts) + len(episodic_pivots) + len(parabolic_shorts)
+
+        return {
+            "date": str(data_date),
+            "time": str(data_time),
+            "last_updated": format_last_updated(data_date, data_time),
+            "total_signals": total,
+            "classic_breakouts": classic_breakouts,
+            "classic_breakouts_count": len(classic_breakouts),
+            "episodic_pivots": episodic_pivots,
+            "episodic_pivots_count": len(episodic_pivots),
+            "parabolic_shorts": parabolic_shorts,
+            "parabolic_shorts_count": len(parabolic_shorts),
+            "parabolic_short_warning": (
+                "Parabolic short signals are daily-bar approximations only. "
+                "Marios' actual entry triggers are intraday (ORB break / VWAP failure). "
+                "Confirm with /intraday/{symbol} before placing any short position."
+            ),
+        }
+    finally:
+        session.close()
 
 
 @router.post("/strategies/run_all", tags=["Strategies"])

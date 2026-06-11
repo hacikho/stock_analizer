@@ -42,6 +42,7 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
 
 import json
+import time
 import datetime
 import pandas as pd
 import numpy as np
@@ -192,24 +193,41 @@ def detect_stage(df: pd.DataFrame) -> int:
 
 def count_distribution_days(df: pd.DataFrame, days: int = 25) -> int:
     """
-    Count distribution days (price down on higher volume) in the last N days.
-    
+    Count distribution days in the last N days using IBD's definition:
+      1. Close is down >0.2% from the prior close (stalling counts excluded here).
+      2. Volume is higher than the prior day's volume.
+      3. Volume is above the 50-day average volume (confirms institutional selling).
+
+    A stall day (price up but volume and close near lows of the range) is NOT
+    counted here — that would require intraday data.
+
     Returns:
         Number of distribution days
     """
-    if len(df) < days + 1:
+    if len(df) < max(days + 1, 51):
         return 0
-    
-    recent_df = df.tail(days)
+
+    # Pre-compute 50-day average volume aligned to the full DataFrame
+    df = df.copy()
+    df['vol_ma_50'] = df['volume'].rolling(window=50).mean()
+
+    recent_df = df.tail(days + 1).reset_index(drop=True)  # +1 so we can diff the first row
     distribution_count = 0
-    
+
     for i in range(1, len(recent_df)):
-        price_down = recent_df['close'].iloc[i] < recent_df['close'].iloc[i-1]
-        volume_up = recent_df['volume'].iloc[i] > recent_df['volume'].iloc[i-1]
-        
-        if price_down and volume_up:
+        prev_close = recent_df['close'].iloc[i - 1]
+        curr_close = recent_df['close'].iloc[i]
+        curr_vol   = recent_df['volume'].iloc[i]
+        prev_vol   = recent_df['volume'].iloc[i - 1]
+        avg_vol    = recent_df['vol_ma_50'].iloc[i]
+
+        price_down_enough = (curr_close - prev_close) / prev_close < -0.002  # >0.2% decline
+        volume_higher_than_prior = curr_vol > prev_vol
+        volume_above_avg = avg_vol > 0 and curr_vol > avg_vol
+
+        if price_down_enough and volume_higher_than_prior and volume_above_avg:
             distribution_count += 1
-    
+
     return distribution_count
 
 
@@ -775,10 +793,11 @@ async def run_vibia_hybrid_screen(symbols: List[str]) -> Dict[str, List[Dict]]:
     }
     
     # --- DB batch read: load all needed tickers at once ---
-    import time
+    # days=730 ensures we have 200+ bars for CANSLIM stage detection and
+    # 100+ bars for TQQQ entry/exit logic (both require significant history).
     all_needed = list(symbols) + ["TQQQ", "SPY"]
     t0 = time.time()
-    dfs = get_multiple_dataframes_from_db(all_needed)
+    dfs = get_multiple_dataframes_from_db(all_needed, days=730)
     db_hits = sum(1 for v in dfs.values() if v is not None and not v.empty)
     print(f"📂 DB batch read: {db_hits}/{len(all_needed)} tickers in {time.time()-t0:.2f}s")
 
@@ -929,12 +948,12 @@ async def run_and_store_vibia_hybrid():
             )
             session.add(entry)
             total_stored += 1
-        
+
         session.commit()
         print(f"✅ Stored {total_stored} signals in database for {today} {time_now}")
-        
+
         return results
-        
+
     except Exception as e:
         print(f"❌ Error in run_and_store_vibia_hybrid: {e}")
         session.rollback()
@@ -948,8 +967,11 @@ async def run_and_store_vibia_hybrid():
 if __name__ == "__main__":
     """
     Entry point for running Vibia J.'s hybrid strategy as a script.
-    
+
     Usage:
         python vibia_j_hybrid_strategy.py
+    """
+    asyncio.run(run_and_store_vibia_hybrid())
+egy.py
     """
     asyncio.run(run_and_store_vibia_hybrid())

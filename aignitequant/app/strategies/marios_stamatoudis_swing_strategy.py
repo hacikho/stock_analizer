@@ -178,39 +178,64 @@ def detect_gap_up(df: pd.DataFrame, min_gap_pct: float = 0.05) -> Tuple[bool, fl
 def is_momentum_failing(df: pd.DataFrame, rsi_threshold: float = 70) -> bool:
     """
     Detect if momentum is failing on a parabolic move.
-    
+
+    NOTE — intraday vs daily limitation:
+    Marios' Parabolic Short is fundamentally an intraday strategy. His entry trigger
+    ("break of the opening range low" or "failed VWAP reclaim") requires intraday bars.
+    On daily OHLCV data we can only approximate these signals:
+
+    - "Breaking opening range low" → approximated as: close finishes in the LOWER THIRD
+      of the day's high-low range. (close < open alone is not sufficient; close below
+      the low is logically impossible and was a prior bug here.)
+    - VWAP → approximated as a 20-day rolling VWAP (see calculate_vwap). Not the same as
+      intraday VWAP. Use intraday_bars data if a tighter trigger is required.
+
     Args:
-        df: DataFrame with price data
-        rsi_threshold: RSI threshold for overbought
-        
+        df: DataFrame with daily OHLCV data.
+        rsi_threshold: RSI level above which the stock is considered overbought.
+
     Returns:
-        True if momentum is failing
+        True if momentum appears to be failing on daily bars.
     """
     if len(df) < 20:
         return False
-    
+
     # Calculate RSI
     rsi = calculate_rsi(df)
     current_rsi = rsi.iloc[-1]
-    
-    # Check if RSI is rolling over from overbought
+
+    # RSI rolling over from overbought territory
     rsi_rolling_over = current_rsi < rsi.iloc[-2] and rsi.iloc[-2] > rsi_threshold
-    
-    # Check if price is making lower highs
+
+    # Lower highs over the last 5 days
     recent_highs = df['high'].tail(5)
     lower_highs = recent_highs.iloc[-1] < recent_highs.max()
-    
-    # Check if breaking below opening range
-    opening_range_low = df['low'].iloc[-1]
-    breaking_opening_range = df['close'].iloc[-1] < opening_range_low
-    
-    return rsi_rolling_over or (lower_highs and breaking_opening_range)
+
+    # Daily-bar proxy for "close breaks opening range low":
+    # close finishes in the lower third of the day's range.
+    # (close < low is always False on OHLCV bars and was previously a bug here.)
+    day_range = df['high'].iloc[-1] - df['low'].iloc[-1]
+    if day_range > 0:
+        lower_third_boundary = df['low'].iloc[-1] + (day_range / 3)
+        close_in_lower_third = df['close'].iloc[-1] <= lower_third_boundary
+    else:
+        close_in_lower_third = False
+
+    return rsi_rolling_over or (lower_highs and close_in_lower_third)
 
 
 # ==================== SYNC FROM-DF SCANNER FUNCTIONS ====================
 
-def scan_classic_breakout_from_df(symbol: str, df: pd.DataFrame) -> Optional[Dict]:
-    """Sync version of scan_classic_breakout that works on a pre-loaded DataFrame."""
+def scan_classic_breakout_from_df(symbol: str, df: pd.DataFrame, spy_df: Optional[pd.DataFrame] = None) -> Optional[Dict]:
+    """Sync version of scan_classic_breakout that works on a pre-loaded DataFrame.
+
+    Args:
+        symbol:  Ticker symbol.
+        df:      Daily OHLCV DataFrame for the stock (lowercase columns, sorted ascending).
+        spy_df:  Optional SPY daily OHLCV DataFrame for relative-strength check.
+                 When provided, the stock must outperform SPY over the last 63 trading
+                 days (≈3 months) — a key Marios Stamatoudis selection criterion.
+    """
     try:
         if df is None or len(df) < 200:
             return None
@@ -253,6 +278,29 @@ def scan_classic_breakout_from_df(symbol: str, df: pd.DataFrame) -> Optional[Dic
         if cons_range_pct > CLASSIC_CONSOLIDATION_RANGE_PCT:
             return None
 
+        # Marios' key structural requirement: consolidation must form HIGHER LOWS.
+        # Price following the 10/20/50-day MA upward, not just staying in a range.
+        # We verify this via linear regression on the consolidation lows — positive
+        # slope means lows are trending up (supply drying up, demand building).
+        if len(consolidation_df) >= 4:
+            cons_lows = consolidation_df['low'].values
+            x = np.arange(len(cons_lows))
+            lows_slope = np.polyfit(x, cons_lows, 1)[0]
+            if lows_slope <= 0:
+                return None  # Lower lows — not a valid Marios consolidation
+        else:
+            return None
+
+        # Marios requires stocks that are outperforming the market index.
+        # Check: 3-month (63-day) return of the stock must beat SPY.
+        rs_vs_spy = None
+        if spy_df is not None and len(spy_df) >= 63 and len(df) >= 63:
+            stock_return_63 = (df['close'].iloc[-1] / df['close'].iloc[-63]) - 1
+            spy_return_63 = (spy_df['close'].iloc[-1] / spy_df['close'].iloc[-63]) - 1
+            rs_vs_spy = round(float(stock_return_63 - spy_return_63) * 100, 2)  # excess return %
+            if stock_return_63 <= spy_return_63:
+                return None  # Underperforming the market — skip
+
         breakout, resistance_level = detect_trendline_breakout(df, len(df) - len(consolidation_df))
         if not breakout:
             return None
@@ -277,6 +325,8 @@ def scan_classic_breakout_from_df(symbol: str, df: pd.DataFrame) -> Optional[Dic
             "prior_move_pct": float(move_pct * 100),
             "consolidation_days": int(len(consolidation_df)),
             "consolidation_range_pct": float(cons_range_pct * 100),
+            "consolidation_lows_slope": round(float(lows_slope), 4),
+            "rs_vs_spy_63d": rs_vs_spy,  # excess return vs SPY over 63 days (%); None if SPY unavailable
             "adr": float(adr),
             "risk_reward": float((first_target - entry_price) / (entry_price - stop_loss)) if entry_price > stop_loss else 0,
             "above_sma_50": bool(entry_price > df['sma_50'].iloc[-1]) if not pd.isna(df['sma_50'].iloc[-1]) else False,
@@ -310,6 +360,16 @@ def scan_episodic_pivot_from_df(symbol: str, df: pd.DataFrame) -> Optional[Dict]
         if not gap_detected:
             return None
 
+        # Marios requires unusual volume on the gap day — confirms institutional participation.
+        # Require gap-day volume ≥ 1.5× the prior 20-day average.
+        if len(df) >= 21 and df['volume'].iloc[-1] > 0:
+            avg_vol_20 = df['volume'].iloc[-21:-1].mean()
+            rel_vol = df['volume'].iloc[-1] / avg_vol_20 if avg_vol_20 > 0 else 0
+            if rel_vol < 1.5:
+                return None  # Volume not confirming the gap
+        else:
+            rel_vol = None
+
         opening_range_high = df['high'].iloc[-1]
         entry_price = opening_range_high
         stop_loss = df['low'].iloc[-1]
@@ -328,10 +388,16 @@ def scan_episodic_pivot_from_df(symbol: str, df: pd.DataFrame) -> Optional[Dict]
             "potential_to_prior_high_pct": float(potential_pct * 100),
             "risk_reward": float((prior_high - entry_price) / (entry_price - stop_loss)) if entry_price > stop_loss else 0,
             "opening_range_high": float(opening_range_high),
-            "catalyst_detected": True,
+            # gap_detected: True means a ≥5% gap-up was observed on daily bars.
+            # Marios' episodic pivot requires a FUNDAMENTAL CATALYST (earnings surprise,
+            # FDA approval, major contract, etc.) — this flag does NOT confirm that.
+            # Always verify the catalyst manually before trading this signal.
+            "gap_detected": True,
+            "catalyst_note": "Gap-up ≥5% detected on daily bars — manual confirmation of fundamental catalyst required",
+            "relative_volume": round(float(rel_vol), 2) if rel_vol is not None else None,
         }
 
-        print(f"✅ EPISODIC PIVOT: {symbol} @ ${entry_price:.2f} | Gap: {gap_pct*100:.1f}% | Potential: {potential_pct*100:.1f}%")
+        print(f"✅ EPISODIC PIVOT: {symbol} @ ${entry_price:.2f} | Gap: {gap_pct*100:.1f}% | RelVol: {rel_vol:.1f}x | Potential: {potential_pct*100:.1f}%")
         return signal
 
     except Exception as e:
@@ -340,7 +406,19 @@ def scan_episodic_pivot_from_df(symbol: str, df: pd.DataFrame) -> Optional[Dict]
 
 
 def scan_parabolic_short_from_df(symbol: str, df: pd.DataFrame) -> Optional[Dict]:
-    """Sync version of scan_parabolic_short that works on a pre-loaded DataFrame."""
+    """Sync version of scan_parabolic_short that works on a pre-loaded DataFrame.
+
+    ⚠️  ARCHITECTURAL LIMITATION — DAILY DATA ONLY:
+    Marios Stamatoudis' Parabolic Short is an INTRADAY strategy. His precise entry
+    triggers (break of the 30-minute opening range low, failed VWAP reclaim, intraday
+    reversal candles) cannot be faithfully replicated from daily OHLCV bars alone.
+
+    What this function provides is a daily-bar SCREENING LAYER that identifies stocks
+    with the right macro conditions (100-400% parabolic move, overbought RSI, momentum
+    rollover). Any signal from this function should be treated as a WATCHLIST CANDIDATE,
+    not a ready-to-trade entry. The actual entry trigger must be confirmed using intraday
+    data (see IntradayBar table / intraday_bars endpoint) before placing a short position.
+    """
     try:
         if df is None or len(df) < PARABOLIC_LOOKBACK_DAYS:
             return None
@@ -359,6 +437,9 @@ def scan_parabolic_short_from_df(symbol: str, df: pd.DataFrame) -> Optional[Dict
 
         rsi = calculate_rsi(df)
         current_rsi = rsi.iloc[-1]
+        # NOTE: calculate_vwap on daily bars computes a 20-day rolling VWAP proxy.
+        # This is NOT intraday VWAP. Marios uses intraday VWAP as a key entry/exit
+        # reference; this value is provided for context only.
         vwap = calculate_vwap(df.tail(20))
         entry_price = df['close'].iloc[-1]
         stop_loss = df['high'].iloc[-1]
@@ -459,25 +540,35 @@ async def scan_classic_breakout(symbol: str, session: aiohttp.ClientSession) -> 
         
         if cons_range_pct > CLASSIC_CONSOLIDATION_RANGE_PCT:
             return None
-        
+
+        # Marios' structural requirement: consolidation must form HIGHER LOWS.
+        if len(consolidation_df) >= 4:
+            cons_lows = consolidation_df['low'].values
+            x = np.arange(len(cons_lows))
+            lows_slope = np.polyfit(x, cons_lows, 1)[0]
+            if lows_slope <= 0:
+                return None  # Lower lows — not a valid Marios consolidation
+        else:
+            return None
+
         # Detect trendline breakout
         breakout, resistance_level = detect_trendline_breakout(df, len(df) - len(consolidation_df))
-        
+
         if not breakout:
             return None
-        
+
         # Calculate stop loss (breakout day's low)
         stop_loss = df['low'].iloc[-1]
-        
+
         # Calculate first profit target (2.5-3x ADR)
         adr = calculate_adr(df)
         entry_price = df['close'].iloc[-1]
         first_target = entry_price + (adr * CLASSIC_ADR_MULTIPLIER)
-        
+
         # Calculate trailing stop levels
         sma_10 = df['close'].tail(10).mean()
         sma_20 = df['close'].tail(20).mean()
-        
+
         signal = {
             "symbol": symbol,
             "strategy": "classic_breakout",
@@ -491,15 +582,16 @@ async def scan_classic_breakout(symbol: str, session: aiohttp.ClientSession) -> 
             "prior_move_pct": float(move_pct * 100),
             "consolidation_days": int(len(consolidation_df)),
             "consolidation_range_pct": float(cons_range_pct * 100),
+            "consolidation_lows_slope": round(float(lows_slope), 4),
             "adr": float(adr),
             "risk_reward": float((first_target - entry_price) / (entry_price - stop_loss)) if entry_price > stop_loss else 0,
             "above_sma_50": bool(entry_price > df['sma_50'].iloc[-1]) if not pd.isna(df['sma_50'].iloc[-1]) else False,
             "above_sma_200": bool(entry_price > df['sma_200'].iloc[-1]) if not pd.isna(df['sma_200'].iloc[-1]) else False,
         }
-        
+
         print(f"✅ CLASSIC BREAKOUT: {symbol} @ ${entry_price:.2f} | Move: {move_pct*100:.1f}% | RR: {signal['risk_reward']:.2f}")
         return signal
-        
+
     except Exception as e:
         print(f"Error scanning {symbol} for classic breakout: {e}")
         return None
@@ -538,22 +630,31 @@ async def scan_episodic_pivot(symbol: str, session: aiohttp.ClientSession) -> Op
         
         # Detect gap up 5%+ today
         gap_detected, gap_pct = detect_gap_up(df, EPISODIC_MIN_GAP_PCT)
-        
+
         if not gap_detected:
             return None
-        
+
+        # Require unusual volume on the gap day (≥1.5× 20-day average)
+        if len(df) >= 21 and df['volume'].iloc[-1] > 0:
+            avg_vol_20 = df['volume'].iloc[-21:-1].mean()
+            rel_vol = df['volume'].iloc[-1] / avg_vol_20 if avg_vol_20 > 0 else 0
+            if rel_vol < 1.5:
+                return None
+        else:
+            rel_vol = None
+
         # Calculate entry point (opening range high)
         # Since we don't have intraday data, use today's high as proxy
         opening_range_high = df['high'].iloc[-1]
         entry_price = opening_range_high
-        
+
         # Stop loss at day's low
         stop_loss = df['low'].iloc[-1]
-        
+
         # Calculate potential (distance to prior high)
         prior_high = lookback_df['high'].max()
         potential_pct = (prior_high - entry_price) / entry_price
-        
+
         signal = {
             "symbol": symbol,
             "strategy": "episodic_pivot",
@@ -566,12 +667,14 @@ async def scan_episodic_pivot(symbol: str, session: aiohttp.ClientSession) -> Op
             "potential_to_prior_high_pct": float(potential_pct * 100),
             "risk_reward": float((prior_high - entry_price) / (entry_price - stop_loss)) if entry_price > stop_loss else 0,
             "opening_range_high": float(opening_range_high),
-            "catalyst_detected": True,  # Gap up suggests catalyst
+            "gap_detected": True,
+            "catalyst_note": "Gap-up ≥5% detected on daily bars — manual confirmation of fundamental catalyst required",
+            "relative_volume": round(float(rel_vol), 2) if rel_vol is not None else None,
         }
-        
-        print(f"✅ EPISODIC PIVOT: {symbol} @ ${entry_price:.2f} | Gap: {gap_pct*100:.1f}% | Potential: {potential_pct*100:.1f}%")
+
+        print(f"✅ EPISODIC PIVOT: {symbol} @ ${entry_price:.2f} | Gap: {gap_pct*100:.1f}% | RelVol: {rel_vol:.1f}x | Potential: {potential_pct*100:.1f}%")
         return signal
-        
+
     except Exception as e:
         print(f"Error scanning {symbol} for episodic pivot: {e}")
         return None
@@ -582,11 +685,15 @@ async def scan_episodic_pivot(symbol: str, session: aiohttp.ClientSession) -> Op
 async def scan_parabolic_short(symbol: str, session: aiohttp.ClientSession) -> Optional[Dict]:
     """
     Scan for Parabolic Short pattern (extreme moves ready to reverse).
-    
+
+    ⚠️  ARCHITECTURAL LIMITATION — DAILY DATA ONLY:
+    Marios' Parabolic Short requires intraday entry triggers. Signals from this function
+    are daily-bar watchlist candidates only — confirm with intraday data before trading.
+
     Args:
         symbol: Stock symbol to scan
         session: aiohttp session
-        
+
     Returns:
         Dict with signal details if pattern detected, None otherwise
     """
@@ -616,9 +723,9 @@ async def scan_parabolic_short(symbol: str, session: aiohttp.ClientSession) -> O
         rsi = calculate_rsi(df)
         current_rsi = rsi.iloc[-1]
         
-        # Calculate VWAP (simplified for daily data)
+        # 20-day rolling VWAP proxy (NOT intraday VWAP — for context only)
         vwap = calculate_vwap(df.tail(20))
-        
+
         # Entry price (current close)
         entry_price = df['close'].iloc[-1]
         
@@ -663,28 +770,31 @@ async def scan_parabolic_short(symbol: str, session: aiohttp.ClientSession) -> O
 async def run_swing_trade_screen(symbols: List[str], strategies: List[str] = None) -> Dict[str, List[Dict]]:
     """
     Run swing trade strategies on a list of symbols.
-    
+
     Args:
         symbols: List of stock symbols to scan
         strategies: List of strategies to run. Options: ['classic_breakout', 'episodic_pivot', 'parabolic_short']
                    If None, runs all strategies.
-        
+
     Returns:
         Dict with strategy names as keys and lists of signals as values
     """
     if strategies is None:
         strategies = ['classic_breakout', 'episodic_pivot', 'parabolic_short']
-    
+
     results = {strategy: [] for strategy in strategies}
-    
+
     # --- Phase 1: Batch read from DB ---
     print(f"🔍 Scanning {len(symbols)} symbols for swing trade opportunities...")
     print(f"📊 Active strategies: {', '.join(strategies)}")
 
     t0 = time.time()
-    all_dfs = get_multiple_dataframes_from_db(symbols, days=730)
+    all_dfs = get_multiple_dataframes_from_db(symbols + ["SPY"], days=730)
     db_time = time.time() - t0
     print(f"📂 DB batch read: {len(all_dfs)} DataFrames in {db_time:.2f}s")
+
+    # SPY needed for Classic Breakout relative-strength check
+    spy_df = all_dfs.get("SPY")
 
     api_fallback_symbols = []
 
@@ -693,7 +803,7 @@ async def run_swing_trade_screen(symbols: List[str], strategies: List[str] = Non
         if df is not None and len(df) >= 90:
             try:
                 if 'classic_breakout' in strategies:
-                    signal = scan_classic_breakout_from_df(symbol, df)
+                    signal = scan_classic_breakout_from_df(symbol, df, spy_df=spy_df)
                     if signal:
                         results['classic_breakout'].append(signal)
 
@@ -736,7 +846,7 @@ async def run_swing_trade_screen(symbols: List[str], strategies: List[str] = Non
                 except Exception as e:
                     print(f"Error processing {symbol}: {e}")
                     continue
-    
+
     # Print summary
     print("\n" + "="*60)
     print("SWING TRADE SCAN SUMMARY")
@@ -744,14 +854,14 @@ async def run_swing_trade_screen(symbols: List[str], strategies: List[str] = Non
     for strategy, signals in results.items():
         print(f"{strategy.upper()}: {len(signals)} signals")
     print("="*60 + "\n")
-    
+
     return results
 
 
 async def run_and_store_swing_trades(strategies: List[str] = None):
     """
     Run swing trade strategies on S&P 500 tickers and store results in the database.
-    
+
     Args:
         strategies: List of strategies to run. If None, runs all strategies.
     """
@@ -761,15 +871,15 @@ async def run_and_store_swing_trades(strategies: List[str] = None):
         # Get S&P 500 tickers
         tickers = await get_sp500_tickers()
         print(f"📈 Loaded {len(tickers)} S&P 500 tickers")
-        
+
         # Run screening
         results = await run_swing_trade_screen(tickers, strategies)
-        
+
         # Store results in database
         now = datetime.datetime.now()
         today = now.date()
         time_now = now.time().replace(microsecond=0)
-        
+
         total_stored = 0
         for strategy, signals in results.items():
             for signal in signals:
@@ -782,14 +892,14 @@ async def run_and_store_swing_trades(strategies: List[str] = None):
                 )
                 session.add(entry)
                 total_stored += 1
-        
+
         session.commit()
         print(f"✅ Stored {total_stored} swing trade signals in database for {today} {time_now}")
         elapsed = time.time() - overall_start
         print(f"⏱️ Swing trade screen total time: {elapsed:.2f}s")
-        
+
         return results
-        
+
     except Exception as e:
         print(f"❌ Error in run_and_store_swing_trades: {e}")
         session.rollback()
@@ -803,7 +913,7 @@ async def run_and_store_swing_trades(strategies: List[str] = None):
 if __name__ == "__main__":
     """
     Entry point for running the swing trade strategies as a script.
-    
+
     Usage:
         python swing_trade_strategy.py                    # Run all strategies on S&P 500
         python swing_trade_strategy.py classic_breakout   # Run only classic breakout
@@ -811,13 +921,19 @@ if __name__ == "__main__":
         python swing_trade_strategy.py parabolic_short    # Run only parabolic short
     """
     import sys
-    
+
     strategies_to_run = None
     if len(sys.argv) > 1:
         strategy_arg = sys.argv[1].lower()
         if strategy_arg in ['classic_breakout', 'episodic_pivot', 'parabolic_short']:
             strategies_to_run = [strategy_arg]
         else:
+            print(f"Unknown strategy: {strategy_arg}")
+            print("Available strategies: classic_breakout, episodic_pivot, parabolic_short")
+            sys.exit(1)
+
+    asyncio.run(run_and_store_swing_trades(strategies_to_run))
+      else:
             print(f"Unknown strategy: {strategy_arg}")
             print("Available strategies: classic_breakout, episodic_pivot, parabolic_short")
             sys.exit(1)
