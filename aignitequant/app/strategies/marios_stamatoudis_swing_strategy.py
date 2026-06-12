@@ -308,6 +308,13 @@ def scan_classic_breakout_from_df(symbol: str, df: pd.DataFrame, spy_df: Optiona
         stop_loss = df['low'].iloc[-1]
         adr = calculate_adr(df)
         entry_price = df['close'].iloc[-1]
+
+        # Reject if price has already run far past the breakout level — signal is stale.
+        # A valid entry is near the breakout point, not after a 15%+ extension.
+        BREAKOUT_EXTENSION_LIMIT = 0.15
+        if resistance_level > 0 and entry_price > resistance_level * (1 + BREAKOUT_EXTENSION_LIMIT):
+            return None
+
         first_target = entry_price + (adr * CLASSIC_ADR_MULTIPLIER)
         sma_10 = df['close'].tail(10).mean()
         sma_20 = df['close'].tail(20).mean()
@@ -563,6 +570,12 @@ async def scan_classic_breakout(symbol: str, session: aiohttp.ClientSession) -> 
         # Calculate first profit target (2.5-3x ADR)
         adr = calculate_adr(df)
         entry_price = df['close'].iloc[-1]
+
+        # Reject if price has already run far past the breakout level — signal is stale.
+        BREAKOUT_EXTENSION_LIMIT = 0.15
+        if resistance_level > 0 and entry_price > resistance_level * (1 + BREAKOUT_EXTENSION_LIMIT):
+            return None
+
         first_target = entry_price + (adr * CLASSIC_ADR_MULTIPLIER)
 
         # Calculate trailing stop levels

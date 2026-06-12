@@ -56,6 +56,11 @@ logs/
 # OS files
 .DS_Store
 Thumbs.db
+.fuse_hidden*
+
+# SQLite WAL/SHM temporary files
+*.db-wal
+*.db-shm
 
 # Poetry cache/config (optional)
 .poetry/
