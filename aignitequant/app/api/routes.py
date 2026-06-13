@@ -1209,22 +1209,21 @@ def market_pulse():
     Live market snapshot for 8 macro instruments.
 
     Returns the latest price, OHLCV, daily change, and change % for:
-      - S&P 500 (via I:SPX index — Yahoo ^GSPC)
-      - Nasdaq Composite (via I:COMP index — Yahoo ^IXIC)
-      - Dow 30 (via I:DJI index — Yahoo ^DJI)
-      - Russell 2000 (via I:RUT index — Yahoo ^RUT)
-      - VIX / Volatility (via I:VIX — CBOE Volatility Index, spot, matches Yahoo ^VIX)
-      - Gold (via GLD ETF proxy — Yahoo quotes GC=F futures)
+      - S&P 500 (via SPY ETF)
+      - NASDAQ 100 (via QQQ ETF)
+      - Dow 30 (via DIA ETF)
+      - Russell 2000 (via IWM ETF)
+      - VIX / Volatility (via VXX ETP proxy — VIX futures, not spot)
+      - Gold (via GLD ETF)
       - Bitcoin (via X:BTCUSD — Polygon crypto)
-      - Crude Oil (via USO ETF proxy — Yahoo quotes CL=F futures)
+      - Crude Oil (via USO ETF)
 
     Data is refreshed every minute by the fetch_market_pulse Celery task
     and cached in Redis (TTL 5 min).  Reads are sub-millisecond — safe to
     poll every 10-30 seconds from the frontend.
 
-    Note: the five equity indices (I:*) require the Polygon Indices add-on.
-    Gold and Crude Oil remain ETF proxies; swap to Polygon Futures
-    front-month tickers if the Futures add-on is enabled.
+    Note on VIX: VXX tracks VIX futures (not the spot VIX index).
+    To get the actual VIX index, upgrade to the Polygon Indices add-on.
 
     Returns:
         dict: {
