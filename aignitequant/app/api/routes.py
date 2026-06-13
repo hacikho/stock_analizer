@@ -1374,6 +1374,102 @@ def get_follow_the_money_latest():
         session.close()
 
 
+@router.get("/stock/{symbol}", tags=["Stock Details"])
+async def get_stock_details(symbol: str):
+    """
+    Ticker detail card data, pulled live from Polygon for the clickable
+    ticker popup in the UI. Combines three Polygon calls into one payload:
+
+      - profile : company name, exchange, industry, market cap, employees,
+                  homepage, description, list date  (/v3/reference/tickers)
+      - quote   : price, day change %, OHLC, prev close, volume  (snapshot)
+      - bars    : ~40 recent daily closes for the sparkline  (aggregates)
+
+    All Polygon requests stay server-side so the API key is never exposed
+    to the browser.
+    """
+    import aiohttp
+
+    api_key = os.getenv("API_KEY")
+    sym = (symbol or "").strip().upper()
+    if not sym:
+        raise HTTPException(status_code=400, detail="Missing symbol")
+
+    base = "https://api.polygon.io"
+    today = _dt.date.today()
+    frm = (today - _dt.timedelta(days=60)).isoformat()
+    to = today.isoformat()
+
+    details_url = f"{base}/v3/reference/tickers/{sym}"
+    snap_url = f"{base}/v2/snapshot/locale/us/markets/stocks/tickers/{sym}"
+    aggs_url = f"{base}/v2/aggs/ticker/{sym}/range/1/day/{frm}/{to}"
+
+    async def _get(session, url, params):
+        try:
+            async with session.get(url, params=params,
+                                   timeout=aiohttp.ClientTimeout(total=10)) as r:
+                if r.status != 200:
+                    return None
+                return await r.json()
+        except Exception:
+            return None
+
+    async with aiohttp.ClientSession() as session:
+        details_j, snap_j, aggs_j = await asyncio.gather(
+            _get(session, details_url, {"apiKey": api_key}),
+            _get(session, snap_url, {"apiKey": api_key}),
+            _get(session, aggs_url, {"adjusted": "true", "sort": "asc",
+                                     "limit": "120", "apiKey": api_key}),
+        )
+
+    # --- Profile ---
+    profile = {}
+    d = (details_j or {}).get("results") or {}
+    if d:
+        profile = {
+            "name":        d.get("name"),
+            "exchange":    d.get("primary_exchange"),
+            "industry":    d.get("sic_description"),
+            "market_cap":  d.get("market_cap"),
+            "employees":   d.get("total_employees"),
+            "homepage":    d.get("homepage_url"),
+            "description": d.get("description"),
+            "currency":    d.get("currency_name"),
+            "list_date":   d.get("list_date"),
+        }
+
+    # --- Quote (snapshot) ---
+    quote = {}
+    t = (snap_j or {}).get("ticker") or {}
+    if t:
+        day = t.get("day") or {}
+        prev = t.get("prevDay") or {}
+        last = t.get("lastTrade") or {}
+        price = last.get("p") or day.get("c") or prev.get("c")
+        quote = {
+            "price":      price,
+            "change":     t.get("todaysChange"),
+            "change_pct": t.get("todaysChangePerc"),
+            "open":       day.get("o"),
+            "high":       day.get("h"),
+            "low":        day.get("l"),
+            "prev_close": prev.get("c"),
+            "volume":     day.get("v"),
+        }
+
+    # --- Bars (sparkline: timestamp ms + close) ---
+    bars = [
+        {"t": b.get("t"), "c": b.get("c")}
+        for b in ((aggs_j or {}).get("results") or [])
+        if b.get("c") is not None
+    ]
+
+    if not profile and not quote and not bars:
+        raise HTTPException(status_code=404, detail=f"No Polygon data found for {sym}")
+
+    return {"symbol": sym, "profile": profile, "quote": quote, "bars": bars}
+
+
 @router.get("/sector-analysis/latest", tags=["Sector Analysis"])
 def get_latest_sector_analysis():
     """
