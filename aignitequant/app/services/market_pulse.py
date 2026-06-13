@@ -12,23 +12,32 @@ TTL expires (5 minutes), then returns an empty/stale indicator.
 
 Instrument → Polygon ticker mapping
 -------------------------------------
-  S&P 500      → SPY   (ETF proxy; raw I:SPX requires Indices add-on)
-  NASDAQ 100   → QQQ   (ETF proxy)
-  Dow 30       → DIA   (ETF proxy)
-  Russell 2000 → IWM   (ETF proxy)
-  VIX          → VXX   (VIX futures ETP proxy; not spot VIX)
-  Gold         → GLD   (ETF proxy)
-  Bitcoin      → X:BTCUSD  (Polygon crypto ticker — direct)
-  Crude Oil    → USO   (ETF proxy)
+These mirror exactly what Yahoo Finance displays in its US Markets bar.
+
+  S&P 500      → I:SPX    (CBOE S&P 500 index — Yahoo ^GSPC)
+  NASDAQ       → I:COMP   (Nasdaq Composite — Yahoo ^IXIC)
+  Dow 30       → I:DJI    (Dow Jones Industrial Average — Yahoo ^DJI)
+  Russell 2000 → I:RUT    (Russell 2000 index — Yahoo ^RUT)
+  VIX          → I:VIX    (CBOE Volatility Index — Yahoo ^VIX, spot, NOT VXX futures)
+  Gold         → GLD      (ETF proxy; Yahoo quotes GC=F futures — needs Futures add-on)
+  Bitcoin      → X:BTCUSD (Polygon crypto ticker — direct, matches Yahoo BTC-USD)
+  Crude Oil    → USO      (ETF proxy; Yahoo quotes CL=F futures — needs Futures add-on)
+
+The five equity indices (I:*) require the Polygon **Indices** add-on.
+Gold and Crude Oil remain ETF proxies because spot/futures commodity
+values are a separate Polygon Futures product; swap them to futures
+front-month tickers if/when that add-on is enabled.
 
 API strategy
 ------------
-  - 7 ETFs (SPY, QQQ, DIA, IWM, VXX, GLD, USO): one batch snapshot call
+  - 5 indices (I:SPX, I:COMP, I:DJI, I:RUT, I:VIX): one snapshot call
+    GET /v3/snapshot/indices?ticker.any_of=...
+  - 2 ETFs (GLD, USO): one batch snapshot call
     GET /v2/snapshot/locale/us/markets/stocks/tickers
   - Bitcoin: GET /v2/aggs/ticker/X:BTCUSD/prev  (previous close)
              + GET /v2/aggs/ticker/X:BTCUSD/range/1/day/{today}/{today}
                (today's intraday OHLCV)
-  Total: 2-3 API calls per minute.
+  Total: 3-4 API calls per minute.
 
 Redis keys
 ----------
@@ -65,16 +74,17 @@ REDIS_TTL_SECONDS = 300  # 5 minutes — data considered stale after this
 
 # Instrument registry — display order is preserved
 INSTRUMENTS = [
-    {"key": "SP500",       "label": "S&P 500",      "ticker": "SPY",      "type": "stock"},
-    {"key": "NASDAQ",      "label": "NASDAQ 100",   "ticker": "QQQ",      "type": "stock"},
-    {"key": "DOW30",       "label": "Dow 30",       "ticker": "DIA",      "type": "stock"},
-    {"key": "RUSSELL2000", "label": "Russell 2000", "ticker": "IWM",      "type": "stock"},
-    {"key": "VIX",         "label": "VIX (VXX)",    "ticker": "VXX",      "type": "stock"},
+    {"key": "SP500",       "label": "S&P 500",      "ticker": "I:SPX",    "type": "index"},
+    {"key": "NASDAQ",      "label": "Nasdaq",       "ticker": "I:COMP",   "type": "index"},
+    {"key": "DOW30",       "label": "Dow 30",       "ticker": "I:DJI",    "type": "index"},
+    {"key": "RUSSELL2000", "label": "Russell 2000", "ticker": "I:RUT",    "type": "index"},
+    {"key": "VIX",         "label": "VIX",          "ticker": "I:VIX",    "type": "index"},
     {"key": "GOLD",        "label": "Gold",         "ticker": "GLD",      "type": "stock"},
     {"key": "BITCOIN",     "label": "Bitcoin",      "ticker": "X:BTCUSD", "type": "crypto"},
     {"key": "CRUDE_OIL",   "label": "Crude Oil",    "ticker": "USO",      "type": "stock"},
 ]
 
+_INDEX_TICKERS = [i["ticker"] for i in INSTRUMENTS if i["type"] == "index"]
 _ETF_TICKERS = [i["ticker"] for i in INSTRUMENTS if i["type"] == "stock"]
 _INSTRUMENT_MAP = {i["key"]: i for i in INSTRUMENTS}
 
@@ -97,8 +107,30 @@ def _get_redis() -> redis.Redis:
 # Polygon fetch helpers
 # ============================================================
 
+async def _fetch_index_snapshots(session: aiohttp.ClientSession) -> dict:
+    """
+    Single Polygon call for all index tickers (I:SPX, I:COMP, I:DJI, I:RUT, I:VIX).
+    Requires the Polygon Indices add-on. Returns {ticker: result_dict}.
+    """
+    url = "https://api.polygon.io/v3/snapshot/indices"
+    params = {"ticker.any_of": ",".join(_INDEX_TICKERS), "apiKey": API_KEY}
+    try:
+        async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                print(f"⚠️  Market pulse index snapshot HTTP {resp.status}: {body[:200]}")
+                return {}
+            data = await resp.json()
+            return {r["ticker"]: r for r in data.get("results", [])}
+    except Exception as e:
+        print(f"❌ Market pulse index fetch error: {e}")
+        return {}
+
+
 async def _fetch_etf_snapshots(session: aiohttp.ClientSession) -> dict:
-    """Single Polygon call for all 7 ETFs. Returns {ticker: snapshot_dict}."""
+    """Single Polygon call for the ETF proxies (GLD, USO). Returns {ticker: snapshot_dict}."""
+    if not _ETF_TICKERS:
+        return {}
     url = "https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers"
     params = {"tickers": ",".join(_ETF_TICKERS), "apiKey": API_KEY}
     try:
@@ -189,43 +221,72 @@ async def fetch_and_store_market_pulse() -> dict:
     errors = 0
 
     async with aiohttp.ClientSession() as session:
-        etf_snap, btc_data = await asyncio.gather(
+        index_snap, etf_snap, btc_data = await asyncio.gather(
+            _fetch_index_snapshots(session),
             _fetch_etf_snapshots(session),
             _fetch_btc_data(session),
         )
 
     result = []
 
-    # --- ETF instruments ---
     for meta in INSTRUMENTS:
-        if meta["type"] != "stock":
-            continue
-        ticker = meta["ticker"]
-        snap = etf_snap.get(ticker)
-        if not snap:
-            errors += 1
-            print(f"⚠️  No snapshot for {ticker}")
-            continue
+        # --- Index instruments (Polygon Indices add-on) ---
+        if meta["type"] == "index":
+            ticker = meta["ticker"]
+            snap = index_snap.get(ticker)
+            if not snap:
+                errors += 1
+                print(f"⚠️  No index snapshot for {ticker}")
+                continue
 
-        day  = snap.get("day", {})
-        prev = snap.get("prevDay", {})
-        prev_close = prev.get("c")
-        close = day.get("c") or prev_close
+            sess = snap.get("session", {}) or {}
+            value = snap.get("value")
+            prev_close = sess.get("previous_close")
+            close = sess.get("close") or value
 
-        result.append({
-            "instrument": meta["key"],
-            "label":      meta["label"],
-            "ticker":     ticker,
-            "price":      close,
-            "open":       day.get("o"),
-            "high":       day.get("h"),
-            "low":        day.get("l"),
-            "close":      close,
-            "prev_close": prev_close,
-            "change":     round(snap.get("todaysChange", 0.0) or 0.0, 4),
-            "change_pct": round(snap.get("todaysChangePerc", 0.0) or 0.0, 4),
-            "volume":     day.get("v"),
-        })
+            result.append({
+                "instrument": meta["key"],
+                "label":      meta["label"],
+                "ticker":     ticker,
+                "price":      value if value is not None else close,
+                "open":       sess.get("open"),
+                "high":       sess.get("high"),
+                "low":        sess.get("low"),
+                "close":      close,
+                "prev_close": prev_close,
+                "change":     round(sess.get("change", 0.0) or 0.0, 4),
+                "change_pct": round(sess.get("change_percent", 0.0) or 0.0, 4),
+                "volume":     None,  # indices have no volume
+            })
+
+        # --- ETF proxy instruments (Gold, Crude Oil) ---
+        elif meta["type"] == "stock":
+            ticker = meta["ticker"]
+            snap = etf_snap.get(ticker)
+            if not snap:
+                errors += 1
+                print(f"⚠️  No snapshot for {ticker}")
+                continue
+
+            day  = snap.get("day", {})
+            prev = snap.get("prevDay", {})
+            prev_close = prev.get("c")
+            close = day.get("c") or prev_close
+
+            result.append({
+                "instrument": meta["key"],
+                "label":      meta["label"],
+                "ticker":     ticker,
+                "price":      close,
+                "open":       day.get("o"),
+                "high":       day.get("h"),
+                "low":        day.get("l"),
+                "close":      close,
+                "prev_close": prev_close,
+                "change":     round(snap.get("todaysChange", 0.0) or 0.0, 4),
+                "change_pct": round(snap.get("todaysChangePerc", 0.0) or 0.0, 4),
+                "volume":     day.get("v"),
+            })
 
     # --- Bitcoin ---
     btc_meta = _INSTRUMENT_MAP["BITCOIN"]

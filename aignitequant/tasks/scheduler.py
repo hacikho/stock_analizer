@@ -75,9 +75,9 @@ app.conf.beat_schedule = {
         'task': 'aignitequant.tasks.run_vcp_scanner',
         'schedule': crontab(minute='*/15', hour='4-20', day_of_week='1-5'),
     },
-    'follow-the-money-every-15min': {
+    'follow-the-money-every-30min': {
         'task': 'aignitequant.tasks.run_follow_the_money',
-        'schedule': crontab(minute='*/15', hour='4-20', day_of_week='1-5'),
+        'schedule': crontab(minute='*/30', hour='4-20', day_of_week='1-5'),
     },
     'earnings-quality-every-15min': {
         'task': 'aignitequant.tasks.run_earnings_quality',
@@ -110,21 +110,5 @@ app.conf.beat_schedule = {
         'schedule': crontab(minute=0, hour=6, day_of_week='1-5'),
     },
 
-    # --------------------------------------------------------
-    # FOLLOW THE MONEY SECTOR -- 3x per trading day
-    # Sector rotation is gradual; 3 snapshots capture open,
-    # midday, and closing dynamics without excessive API usage.
-    # --------------------------------------------------------
-    'follow-the-money-sector-945am': {
-        'task': 'aignitequant.tasks.run_follow_the_money_sector',
-        'schedule': crontab(minute=45, hour=9, day_of_week='1-5'),
-    },
-    'follow-the-money-sector-1230pm': {
-        'task': 'aignitequant.tasks.run_follow_the_money_sector',
-        'schedule': crontab(minute=30, hour=12, day_of_week='1-5'),
-    },
-    'follow-the-money-sector-415pm': {
-        'task': 'aignitequant.tasks.run_follow_the_money_sector',
-        'schedule': crontab(minute=15, hour=16, day_of_week='1-5'),
-    },
+    # Follow The Money sector tasks replaced by the every-30-min run above.
 }

@@ -201,6 +201,16 @@ class VibiaHybridData(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+# Table for storing Follow The Money sector rotation analysis results
+class FollowTheMoneyData(Base):
+    __tablename__ = 'follow_the_money_data'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    data_date = Column(Date, nullable=False)
+    data_time = Column(Time, nullable=False)
+    data_json = Column(Text, nullable=False)  # Full ranking_report JSON
+    created_at = Column(DateTime, server_default=func.now())
+
+
 # Table for storing Felix Strategy (Institutional 50-SMA Breakout) results
 class FelixData(Base):
     __tablename__ = 'felix_data'

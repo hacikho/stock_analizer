@@ -2,6 +2,7 @@ from aignitequant.app.db import (
     Stage2Data, OptionSignalData, SessionLocal, CanSlimData, BoraData,
     GoldenCrossData, VCPData, EarningsQualityData, FelixData, MarketData,
     MarketDataMeta, IntradayBar, BoraPosition, SwingTradeData, VibiaHybridData,
+    FollowTheMoneyData,
 )
 from aignitequant.app.strategies.leap_option_strategy1 import get_qqq_leap_signal
 from aignitequant.app.strategies.leap_option_strategy2 import get_qqq_gap_down_leap_signal
@@ -1208,21 +1209,22 @@ def market_pulse():
     Live market snapshot for 8 macro instruments.
 
     Returns the latest price, OHLCV, daily change, and change % for:
-      - S&P 500 (via SPY ETF)
-      - NASDAQ 100 (via QQQ ETF)
-      - Dow 30 (via DIA ETF)
-      - Russell 2000 (via IWM ETF)
-      - VIX / Volatility (via VXX ETP proxy — VIX futures, not spot)
-      - Gold (via GLD ETF)
+      - S&P 500 (via I:SPX index — Yahoo ^GSPC)
+      - Nasdaq Composite (via I:COMP index — Yahoo ^IXIC)
+      - Dow 30 (via I:DJI index — Yahoo ^DJI)
+      - Russell 2000 (via I:RUT index — Yahoo ^RUT)
+      - VIX / Volatility (via I:VIX — CBOE Volatility Index, spot, matches Yahoo ^VIX)
+      - Gold (via GLD ETF proxy — Yahoo quotes GC=F futures)
       - Bitcoin (via X:BTCUSD — Polygon crypto)
-      - Crude Oil (via USO ETF)
+      - Crude Oil (via USO ETF proxy — Yahoo quotes CL=F futures)
 
     Data is refreshed every minute by the fetch_market_pulse Celery task
     and cached in Redis (TTL 5 min).  Reads are sub-millisecond — safe to
     poll every 10-30 seconds from the frontend.
 
-    Note on VIX: VXX tracks VIX futures (not the spot VIX index).
-    To get the actual VIX index, upgrade to the Polygon Indices add-on.
+    Note: the five equity indices (I:*) require the Polygon Indices add-on.
+    Gold and Crude Oil remain ETF proxies; swap to Polygon Futures
+    front-month tickers if the Futures add-on is enabled.
 
     Returns:
         dict: {
@@ -1345,6 +1347,33 @@ def fear_greed_index():
         }
 
     return {"error": "CNN index out of range"}
+
+@router.get("/follow-the-money/latest", tags=["Follow The Money"])
+def get_follow_the_money_latest():
+    """
+    Get the most recent Follow The Money sector rotation analysis from the database.
+    Runs every 30 minutes during market hours (4 AM – 8 PM ET, Mon–Fri).
+    """
+    import json
+    session = SessionLocal()
+    try:
+        row = (
+            session.query(FollowTheMoneyData)
+            .order_by(FollowTheMoneyData.data_date.desc(), FollowTheMoneyData.data_time.desc())
+            .first()
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="No Follow The Money data available yet")
+        data = json.loads(row.data_json)
+        data["last_updated"] = f"{row.data_date} {str(row.data_time)[:5]} ET"
+        return {"status": "success", "data": data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
 
 @router.get("/sector-analysis/latest", tags=["Sector Analysis"])
 def get_latest_sector_analysis():

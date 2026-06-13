@@ -551,18 +551,37 @@ async def main():
     # Save reports
     import os
     os.makedirs('reports', exist_ok=True)
-    
+
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     filename = f'reports/sector_ranking_{timestamp}.json'
-    
+
     with open(filename, 'w') as f:
         json.dump(ranking_report, f, indent=2, default=str)
-    
+
     with open('reports/latest_sector_ranking.json', 'w') as f:
         json.dump(ranking_report, f, indent=2, default=str)
-    
+
     print(f"\n💾 Detailed ranking saved to: {filename}")
     print(f"💾 Latest ranking saved to: reports/latest_sector_ranking.json")
+
+    # Persist to database so the API can serve it without relying on the filesystem
+    try:
+        from aignitequant.app.db import SessionLocal, FollowTheMoneyData
+        now = datetime.datetime.now()
+        db = SessionLocal()
+        entry = FollowTheMoneyData(
+            data_date=now.date(),
+            data_time=now.time().replace(microsecond=0),
+            data_json=json.dumps(ranking_report, default=str),
+        )
+        db.add(entry)
+        db.commit()
+        print(f"✅ Follow The Money data saved to DB for {now.date()} {str(now.time())[:5]}")
+        db.close()
+    except Exception as db_err:
+        print(f"⚠️  DB save failed (non-fatal): {db_err}")
+
+    return ranking_report
 
     # Normalize prices to start at 100 for easy comparison
 async def get_sector_breadth(date=None):
