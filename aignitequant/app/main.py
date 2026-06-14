@@ -81,7 +81,7 @@ app.add_middleware(GZipMiddleware, minimum_size=500)
 # Build CORS origins: defaults + production frontend URL if set
 cors_origins = list(settings.CORS_ORIGINS)
 if settings.FRONTEND_URL:
-    cors_origins.append(settings.FRONTEND_URL)
+    cors_origins.extend(u.strip() for u in settings.FRONTEND_URL.split(",") if u.strip())
 
 app.add_middleware(
     CORSMiddleware,
