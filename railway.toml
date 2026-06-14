@@ -1,8 +1,12 @@
 # Railway configuration for AigniteQuant API
-# Note: Deploy as 3 separate services in Railway:
-# 1. api-service (this config)
-# 2. celery-worker-service (use: python start_celery_worker.py)
-# 3. celery-beat-service (use: python start_celery_beat.py)
+# Deploy as 2 services in Railway (was 3):
+# 1. api-service (this config) -- FastAPI app; also runs the
+#    market-pulse refresh loop in-process.
+# 2. celery-worker-service (python start_celery_worker.py) -- runs the
+#    Celery worker WITH Beat embedded (-B), so a separate beat service
+#    is no longer needed.
+# ACTION REQUIRED: delete the old 'celery-beat-service' in the Railway
+# dashboard to stop paying for that always-on service.
 
 [build]
 builder = "nixpacks"
@@ -15,13 +19,7 @@ healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
 
-# Celery Beat Service
-[services.celery-beat-service]
-startCommand = "python start_celery_beat.py"
-restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 5
-
-# Celery Worker Service
+# Celery Worker Service (also runs Beat embedded via -B)
 [services.celery-worker-service]
 startCommand = "python start_celery_worker.py"
 restartPolicyType = "ON_FAILURE"
