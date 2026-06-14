@@ -1378,48 +1378,84 @@ def get_follow_the_money_latest():
 async def get_stock_details(symbol: str):
     """
     Ticker detail card data, pulled live from Polygon for the clickable
-    ticker popup in the UI. Combines three Polygon calls into one payload:
+    ticker popup in the UI. Combines several Polygon calls into one payload:
 
       - profile : company name, exchange, industry, market cap, employees,
                   homepage, description, list date  (/v3/reference/tickers)
       - quote   : price, day change %, OHLC, prev close, volume  (snapshot)
-      - bars    : ~40 recent daily closes for the sparkline  (aggregates)
+      - bars    : 1 year of daily closes for the sparkline / range toggles
+      - stats   : P/E (trailing), EPS, revenue, net income, profit margin
+                  (financials), dividend yield (dividends)
+      - week52  : 52-week high / low (from the 1-year bars)
 
     All Polygon requests stay server-side so the API key is never exposed
-    to the browser.
+    to the browser. The full payload is cached in Redis (~10 min) so the
+    popup stays within the plan's 5-requests/minute limit on repeat opens.
     """
     import aiohttp
+    import json as _json
 
     api_key = os.getenv("API_KEY")
     sym = (symbol or "").strip().upper()
     if not sym:
         raise HTTPException(status_code=400, detail="Missing symbol")
 
+    # --- Redis cache (best-effort) ---
+    cache_key = f"stock:details:{sym}"
+    rds = None
+    try:
+        from aignitequant.app.services.market_pulse import _get_redis
+        rds = _get_redis()
+        cached = rds.get(cache_key)
+        if cached:
+            return _json.loads(cached)
+    except Exception:
+        rds = None
+
     base = "https://api.polygon.io"
     today = _dt.date.today()
-    frm = (today - _dt.timedelta(days=60)).isoformat()
+    yr_ago = (today - _dt.timedelta(days=370)).isoformat()
     to = today.isoformat()
+    div_cutoff = (today - _dt.timedelta(days=365)).isoformat()
 
     details_url = f"{base}/v3/reference/tickers/{sym}"
     snap_url = f"{base}/v2/snapshot/locale/us/markets/stocks/tickers/{sym}"
-    aggs_url = f"{base}/v2/aggs/ticker/{sym}/range/1/day/{frm}/{to}"
+    aggs_url = f"{base}/v2/aggs/ticker/{sym}/range/1/day/{yr_ago}/{to}"
+    fin_url = f"{base}/vX/reference/financials"
+    div_url = f"{base}/v3/reference/dividends"
 
     async def _get(session, url, params):
         try:
             async with session.get(url, params=params,
-                                   timeout=aiohttp.ClientTimeout(total=10)) as r:
+                                   timeout=aiohttp.ClientTimeout(total=12)) as r:
                 if r.status != 200:
                     return None
                 return await r.json()
         except Exception:
             return None
 
+    async def _financials(session):
+        # Prefer trailing-twelve-month; fall back to latest annual filing.
+        for tf in ("ttm", "annual"):
+            j = await _get(session, fin_url, {
+                "ticker": sym, "timeframe": tf, "limit": "1",
+                "order": "desc", "sort": "period_of_report_date", "apiKey": api_key,
+            })
+            res = (j or {}).get("results") or []
+            if res:
+                return res[0]
+        return None
+
     async with aiohttp.ClientSession() as session:
-        details_j, snap_j, aggs_j = await asyncio.gather(
+        details_j, snap_j, aggs_j, fin_r, div_j = await asyncio.gather(
             _get(session, details_url, {"apiKey": api_key}),
             _get(session, snap_url, {"apiKey": api_key}),
             _get(session, aggs_url, {"adjusted": "true", "sort": "asc",
-                                     "limit": "120", "apiKey": api_key}),
+                                     "limit": "400", "apiKey": api_key}),
+            _financials(session),
+            _get(session, div_url, {"ticker": sym, "limit": "12",
+                                    "order": "desc", "sort": "ex_dividend_date",
+                                    "apiKey": api_key}),
         )
 
     # --- Profile ---
@@ -1440,6 +1476,7 @@ async def get_stock_details(symbol: str):
 
     # --- Quote (snapshot) ---
     quote = {}
+    price = None
     t = (snap_j or {}).get("ticker") or {}
     if t:
         day = t.get("day") or {}
@@ -1457,17 +1494,72 @@ async def get_stock_details(symbol: str):
             "volume":     day.get("v"),
         }
 
-    # --- Bars (sparkline: timestamp ms + close) ---
-    bars = [
-        {"t": b.get("t"), "c": b.get("c")}
-        for b in ((aggs_j or {}).get("results") or [])
-        if b.get("c") is not None
-    ]
+    # --- Bars (1y daily) + 52-week range ---
+    raw_bars = (aggs_j or {}).get("results") or []
+    bars = [{"t": b.get("t"), "c": b.get("c")} for b in raw_bars if b.get("c") is not None]
+    week52 = {}
+    highs = [b.get("h") for b in raw_bars if b.get("h") is not None]
+    lows = [b.get("l") for b in raw_bars if b.get("l") is not None]
+    if highs and lows:
+        week52 = {"high": max(highs), "low": min(lows)}
+    if price is None and bars:
+        price = bars[-1]["c"]
+
+    # --- Stats (financials + dividends) ---
+    stats = {}
+    if fin_r:
+        inc = ((fin_r.get("financials") or {}).get("income_statement")) or {}
+
+        def _fval(node):
+            return (inc.get(node) or {}).get("value")
+
+        eps = _fval("diluted_earnings_per_share")
+        if eps is None:
+            eps = _fval("basic_earnings_per_share")
+        revenue = _fval("revenues")
+        net_income = _fval("net_income_loss")
+
+        stats["eps"] = eps
+        stats["revenue"] = revenue
+        stats["net_income"] = net_income
+        stats["financials_timeframe"] = fin_r.get("timeframe")
+        if isinstance(eps, (int, float)) and eps != 0 and isinstance(price, (int, float)):
+            stats["pe"] = price / eps
+        if isinstance(revenue, (int, float)) and revenue != 0 and isinstance(net_income, (int, float)):
+            stats["profit_margin"] = net_income / revenue * 100
+
+    # Dividend yield = trailing-12-month cash dividends / price
+    div_results = (div_j or {}).get("results") or []
+    annual_div = 0.0
+    for dv in div_results:
+        amt = dv.get("cash_amount")
+        ex = dv.get("ex_dividend_date") or ""
+        if isinstance(amt, (int, float)) and ex >= div_cutoff:
+            annual_div += amt
+    if annual_div > 0 and isinstance(price, (int, float)) and price:
+        stats["dividend_yield"] = annual_div / price * 100
+        stats["annual_dividend"] = annual_div
 
     if not profile and not quote and not bars:
         raise HTTPException(status_code=404, detail=f"No Polygon data found for {sym}")
 
-    return {"symbol": sym, "profile": profile, "quote": quote, "bars": bars}
+    payload = {
+        "symbol": sym,
+        "profile": profile,
+        "quote": quote,
+        "bars": bars,
+        "stats": stats,
+        "week52": week52,
+    }
+
+    # Cache (best-effort, 10 min)
+    if rds is not None:
+        try:
+            rds.set(cache_key, _json.dumps(payload), ex=600)
+        except Exception:
+            pass
+
+    return payload
 
 
 @router.get("/sector-analysis/latest", tags=["Sector Analysis"])
