@@ -85,8 +85,12 @@ def get_earnings_tickers_fmp(from_date: datetime, to_date: datetime) -> dict:
     try:
         from_str = from_date.strftime("%Y-%m-%d")
         to_str = to_date.strftime("%Y-%m-%d")
+        # NOTE: the legacy /api/v3/earning_calendar endpoint was retired by FMP
+        # for non-legacy accounts after 2025-08-31 and now returns a "Legacy
+        # Endpoint" error. Use the current /stable/earnings-calendar endpoint.
+        # It keeps the same `symbol` and `date` fields this parser relies on.
         url = (
-            f"https://financialmodelingprep.com/api/v3/earning_calendar"
+            f"https://financialmodelingprep.com/stable/earnings-calendar"
             f"?from={from_str}&to={to_str}&apikey={FMP_API_KEY}"
         )
         response = requests.get(url, timeout=15)
