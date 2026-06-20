@@ -23,11 +23,14 @@ _PULSE_INTERVAL_CLOSED = 240
 
 
 def _is_market_hours(now=None) -> bool:
-    """True during US extended trading hours (4 AM-8 PM ET, Mon-Fri)."""
-    now = now or datetime.datetime.now(_EASTERN)
-    if now.weekday() >= 5:  # Saturday / Sunday
-        return False
-    return 4 <= now.hour < 20
+    """
+    True during US extended trading hours (4 AM-8 PM ET, Mon-Fri),
+    excluding US market holidays. Delegates to the shared market calendar
+    so weekends, off-hours, AND holidays all back the pulse loop off to the
+    slow 'closed' cadence.
+    """
+    from aignitequant.market_calendar import is_market_open
+    return is_market_open(now)
 
 
 async def _market_pulse_loop():

@@ -4,6 +4,7 @@ Celery tasks for executing trading strategies
 import datetime
 import pytz
 from aignitequant.tasks.celery_app import app
+from aignitequant.market_calendar import skip_on_market_holiday
 from aignitequant.app.db import SessionLocal, OptionSignalData, CanSlimData
 from aignitequant.app.services.events import publish_update
 
@@ -15,6 +16,7 @@ EASTERN = pytz.timezone('US/Eastern')
 # Market Data Fetch Task — runs every 10 minutes during market hours
 # ============================================================
 @app.task(name='aignitequant.tasks.fetch_market_data', time_limit=600)
+@skip_on_market_holiday
 def fetch_market_data():
     """
     Centralized market data fetch job.
@@ -50,6 +52,7 @@ def fetch_market_data():
 # Pulls 10-minute bars for pre-market, regular, and after-hours
 # ============================================================
 @app.task(name='aignitequant.tasks.fetch_intraday_data', time_limit=900)
+@skip_on_market_holiday
 def fetch_intraday_data():
     """
     Fetch 10-minute OHLCV bars for all S&P 500 tickers + extras.
@@ -111,6 +114,7 @@ def fetch_market_pulse():
 
 
 @app.task(name='aignitequant.tasks.run_option_strategies')
+@skip_on_market_holiday
 def run_option_strategies():
     """
     Execute option trading strategies and save results to database
@@ -165,6 +169,7 @@ def run_option_strategies():
 
 
 @app.task(name='aignitequant.tasks.run_canslim')
+@skip_on_market_holiday
 def run_canslim():
     """
     Execute CANSLIM screening strategy
@@ -186,6 +191,7 @@ def run_canslim():
 
 
 @app.task(name='aignitequant.tasks.run_bora_strategy')
+@skip_on_market_holiday
 def run_bora_strategy():
     """
     Execute BORA (Breakout Reversal Analysis) strategy
@@ -211,6 +217,7 @@ def run_bora_strategy():
 
 
 @app.task(name='aignitequant.tasks.run_golden_cross')
+@skip_on_market_holiday
 def run_golden_cross():
     """
     Execute Golden Cross strategy
@@ -234,6 +241,7 @@ def run_golden_cross():
 
 
 @app.task(name='aignitequant.tasks.run_stage2')
+@skip_on_market_holiday
 def run_stage2():
     """
     Execute Stage 2 trend analysis
@@ -257,6 +265,7 @@ def run_stage2():
 
 
 @app.task(name='aignitequant.tasks.run_vcp_scanner')
+@skip_on_market_holiday
 def run_vcp_scanner():
     """
     Execute VCP (Volatility Contraction Pattern) scanner on S&P 500
@@ -291,6 +300,7 @@ def run_vcp_scanner():
 
 
 @app.task(name='aignitequant.tasks.run_follow_the_money')
+@skip_on_market_holiday
 def run_follow_the_money():
     """
     Execute Follow-The-Money sector rotation analysis
@@ -318,6 +328,7 @@ def run_follow_the_money():
 
 
 @app.task(name='aignitequant.tasks.run_earnings_quality')
+@skip_on_market_holiday
 def run_earnings_quality():
     """
     Execute Earnings Quality Score analysis for stocks with recent earnings
@@ -352,6 +363,7 @@ def run_earnings_quality():
         print(f"[Celery][ERROR] Earnings Quality analysis failed: {str(e)}")
         return {"status": "error", "error": str(e)}
 @app.task(name='aignitequant.tasks.run_follow_the_money_sector')
+@skip_on_market_holiday
 def run_follow_the_money_sector():
     """
     Execute Follow The Money sector rotation analysis
@@ -394,6 +406,7 @@ def run_follow_the_money_sector():
 
 
 @app.task(name='aignitequant.tasks.run_felix_strategy')
+@skip_on_market_holiday
 def run_felix_strategy():
     """Execute Felix Strategy (SMA crossover + volume spike detection)"""
     import asyncio
@@ -413,6 +426,7 @@ def run_felix_strategy():
 
 
 @app.task(name='aignitequant.tasks.run_vibia_hybrid')
+@skip_on_market_holiday
 def run_vibia_hybrid():
     """Execute Vibia J Hybrid Strategy (CANSLIM + TQQQ entry/exit)"""
     import asyncio
@@ -432,6 +446,7 @@ def run_vibia_hybrid():
 
 
 @app.task(name='aignitequant.tasks.run_marios_swing')
+@skip_on_market_holiday
 def run_marios_swing():
     """Execute Marios Stamatoudis Swing Trade Strategy"""
     import asyncio
