@@ -10,6 +10,21 @@ from celery.schedules import crontab
 from aignitequant.tasks.celery_app import app
 
 # ============================================================
+# Task expiry windows (seconds).
+#
+# A single solo worker processes these tasks. If beat enqueues a task while the
+# worker is still busy, the task waits in Redis. Under the old 24/7 schedule
+# that backlog grew unbounded (~1900 stale tasks accumulated). With `expires`,
+# a task that isn't *started* within its window is discarded instead of piling
+# up, so a fresh run always supersedes a stale one and the queue can't balloon.
+# Each window is set just under the task's own interval.
+# ============================================================
+_EXPIRES_10MIN = 9 * 60     # 540s  -- for */10 tasks
+_EXPIRES_15MIN = 14 * 60    # 840s  -- for */15 tasks
+_EXPIRES_HOURLY = 55 * 60   # 3300s -- for hourly tasks
+_EXPIRES_DAILY = 60 * 60    # 3600s -- for the daily 6 AM task
+
+# ============================================================
 # Beat schedule -- assigned at module import time so tasks are
 # always registered when start_celery_beat.py imports this module.
 # ============================================================
@@ -32,6 +47,7 @@ app.conf.beat_schedule = {
     'market-data-fetch-every-10min': {
         'task': 'aignitequant.tasks.fetch_market_data',
         'schedule': crontab(minute='*/10', hour='4-20', day_of_week='1-5'),
+        'options': {'expires': _EXPIRES_10MIN},
     },
 
     # --------------------------------------------------------
@@ -41,6 +57,7 @@ app.conf.beat_schedule = {
     'intraday-data-fetch-every-10min': {
         'task': 'aignitequant.tasks.fetch_intraday_data',
         'schedule': crontab(minute='*/10', hour='4-19', day_of_week='1-5'),
+        'options': {'expires': _EXPIRES_10MIN},
     },
 
     # --------------------------------------------------------
@@ -51,14 +68,17 @@ app.conf.beat_schedule = {
     'canslim-every-15min': {
         'task': 'aignitequant.tasks.run_canslim',
         'schedule': crontab(minute='*/15', hour='4-20', day_of_week='1-5'),
+        'options': {'expires': _EXPIRES_15MIN},
     },
     'options-every-15min': {
         'task': 'aignitequant.tasks.run_option_strategies',
         'schedule': crontab(minute='*/15', hour='4-20', day_of_week='1-5'),
+        'options': {'expires': _EXPIRES_15MIN},
     },
     'bora-every-15min': {
         'task': 'aignitequant.tasks.run_bora_strategy',
         'schedule': crontab(minute='*/15', hour='4-20', day_of_week='1-5'),
+        'options': {'expires': _EXPIRES_15MIN},
     },
 
     # --------------------------------------------------------
@@ -72,22 +92,27 @@ app.conf.beat_schedule = {
     'golden-cross-hourly': {
         'task': 'aignitequant.tasks.run_golden_cross',
         'schedule': crontab(minute=5, hour='4-20', day_of_week='1-5'),
+        'options': {'expires': _EXPIRES_HOURLY},
     },
     'stage2-hourly': {
         'task': 'aignitequant.tasks.run_stage2',
         'schedule': crontab(minute=20, hour='4-20', day_of_week='1-5'),
+        'options': {'expires': _EXPIRES_HOURLY},
     },
     'vcp-scanner-hourly': {
         'task': 'aignitequant.tasks.run_vcp_scanner',
         'schedule': crontab(minute=35, hour='4-20', day_of_week='1-5'),
+        'options': {'expires': _EXPIRES_HOURLY},
     },
     'follow-the-money-hourly': {
         'task': 'aignitequant.tasks.run_follow_the_money',
         'schedule': crontab(minute=50, hour='4-20', day_of_week='1-5'),
+        'options': {'expires': _EXPIRES_HOURLY},
     },
     'earnings-quality-hourly': {
         'task': 'aignitequant.tasks.run_earnings_quality',
         'schedule': crontab(minute=10, hour='4-20', day_of_week='1-5'),
+        'options': {'expires': _EXPIRES_HOURLY},
     },
 
     # Felix, Vibia Hybrid, and Marios Swing were missing from the
@@ -95,14 +120,17 @@ app.conf.beat_schedule = {
     'felix-every-15min': {
         'task': 'aignitequant.tasks.run_felix_strategy',
         'schedule': crontab(minute='*/15', hour='4-20', day_of_week='1-5'),
+        'options': {'expires': _EXPIRES_15MIN},
     },
     'vibia-hybrid-every-15min': {
         'task': 'aignitequant.tasks.run_vibia_hybrid',
         'schedule': crontab(minute='*/15', hour='4-20', day_of_week='1-5'),
+        'options': {'expires': _EXPIRES_15MIN},
     },
     'marios-swing-every-15min': {
         'task': 'aignitequant.tasks.run_marios_swing',
         'schedule': crontab(minute='*/15', hour='4-20', day_of_week='1-5'),
+        'options': {'expires': _EXPIRES_15MIN},
     },
 
     # --------------------------------------------------------
@@ -114,6 +142,7 @@ app.conf.beat_schedule = {
     'earnings-quality-daily-6am': {
         'task': 'aignitequant.tasks.run_earnings_quality',
         'schedule': crontab(minute=0, hour=6, day_of_week='1-5'),
+        'options': {'expires': _EXPIRES_DAILY},
     },
 
     # Follow The Money sector tasks replaced by the hourly run above.
