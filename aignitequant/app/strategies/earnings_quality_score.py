@@ -31,7 +31,7 @@ import aiohttp
 import warnings
 import os
 from dotenv import load_dotenv
-from aignitequant.app.db import SessionLocal, EarningsQualityData
+from aignitequant.app.db import SessionLocal, EarningsQualityData, EarningsQualityRunLog
 from sqlalchemy import and_
 
 # Import your existing Polygon services
@@ -43,6 +43,16 @@ from aignitequant.app.services.market_data import get_dataframe_from_db
 warnings.filterwarnings('ignore')
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
+
+
+class FMPCalendarError(Exception):
+    """Raised when the FMP earnings-calendar fetch fails (HTTP/network error).
+
+    Distinct from a successful fetch that simply returns zero qualifying
+    tickers — that case returns an empty dict, not this exception.
+    """
+    pass
+
 
 def is_trading_day(date):
     """Check if a date is a trading day (not weekend)"""
@@ -96,9 +106,15 @@ def get_earnings_tickers_fmp(from_date: datetime, to_date: datetime) -> dict:
         response = requests.get(url, timeout=15)
         if response.status_code != 200:
             print(f"[FMP] Earnings calendar HTTP {response.status_code}")
-            return {}
+            raise FMPCalendarError(f"HTTP {response.status_code}")
 
         data = response.json()
+        # FMP signals plan/endpoint problems as a dict with an error message
+        # rather than the usual list — treat that as a fetch error, not "0 earnings".
+        if isinstance(data, dict):
+            msg = data.get("Error Message") or data.get("message") or str(data)[:200]
+            print(f"[FMP] Earnings calendar error payload: {msg}")
+            raise FMPCalendarError(msg)
         et_today = _et_today()
         result = {}
         for item in data:
@@ -122,9 +138,13 @@ def get_earnings_tickers_fmp(from_date: datetime, to_date: datetime) -> dict:
         print(f"[FMP] Found {len(result)} confirmed earnings tickers ({from_str} → {to_str}, ET today={et_today})")
         return result
 
+    except FMPCalendarError:
+        # Already a classified fetch error — propagate so the caller logs 'fmp_error'.
+        raise
     except Exception as e:
+        # Network/parse failure: a fetch error, not a genuine zero-earnings result.
         print(f"[FMP] Earnings calendar error: {e}")
-        return {}
+        raise FMPCalendarError(str(e))
 
 class EarningsQualityAnalyzer:
     def __init__(self):
@@ -932,7 +952,33 @@ def save_to_database(results: Dict):
         db.rollback()
     finally:
         db.close()
-    
+
+
+def log_run(status: str, tickers_found: int = 0, results_saved: int = 0, detail: str = None):
+    """Write one heartbeat row per run so gaps in earnings_quality_data are explainable.
+
+    status: 'saved' | 'no_earnings' | 'fmp_error'
+    """
+    db = SessionLocal()
+    try:
+        now = datetime.now()
+        db.add(EarningsQualityRunLog(
+            run_date=now.date(),
+            run_time=now.time(),
+            status=status,
+            tickers_found=tickers_found,
+            results_saved=results_saved,
+            detail=(detail[:2000] if detail else None),
+        ))
+        db.commit()
+        print(f"🫀 Run log: status={status} tickers_found={tickers_found} results_saved={results_saved}")
+    except Exception as e:
+        print(f"❌ Error writing run log: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
 async def main():
     """Main execution function"""
     analyzer = EarningsQualityAnalyzer()
@@ -947,11 +993,20 @@ async def main():
     to_dt = datetime.combine(et_yesterday, datetime.min.time())
     print(f"Fetching earnings calendar ({from_dt.strftime('%Y-%m-%d')} → {to_dt.strftime('%Y-%m-%d')}, ET today={et_today}) from FMP...")
 
-    earnings_with_dates = get_earnings_tickers_fmp(from_dt, to_dt)
+    window_str = f"{from_dt.strftime('%Y-%m-%d')} → {to_dt.strftime('%Y-%m-%d')}"
+    try:
+        earnings_with_dates = get_earnings_tickers_fmp(from_dt, to_dt)
+    except FMPCalendarError as e:
+        # FMP fetch itself failed — record so this is NOT mistaken for "no earnings".
+        print(f"❌ FMP calendar fetch failed — skipping analysis: {e}")
+        log_run('fmp_error', detail=f"window={window_str}; error={e}")
+        return
+
     all_earnings_tickers = list(earnings_with_dates.keys())
 
     if not all_earnings_tickers:
         print("❌ No earnings tickers returned from FMP — skipping analysis")
+        log_run('no_earnings', tickers_found=0, detail=f"window={window_str}")
         return
 
     print(f"\nFound {len(all_earnings_tickers)} tickers for analysis:")
@@ -973,6 +1028,10 @@ async def main():
 
     # Save to database FIRST (before any file I/O that could raise)
     save_to_database(results)
+
+    # Heartbeat: analysis ran and results were persisted.
+    log_run('saved', tickers_found=len(all_earnings_tickers),
+            results_saved=len(results.get('results', [])), detail=f"window={window_str}")
 
     # Save results to JSON (best-effort; ephemeral on Railway but useful locally)
     try:
