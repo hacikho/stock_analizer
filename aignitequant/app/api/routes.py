@@ -2,7 +2,7 @@ from aignitequant.app.db import (
     Stage2Data, OptionSignalData, SessionLocal, CanSlimData, BoraData,
     GoldenCrossData, VCPData, EarningsQualityData, FelixData, MarketData,
     MarketDataMeta, IntradayBar, BoraPosition, SwingTradeData, VibiaHybridData,
-    FollowTheMoneyData,
+    FollowTheMoneyData, EarningsQualityRunLog,
 )
 from aignitequant.app.strategies.leap_option_strategy1 import get_qqq_leap_signal
 from aignitequant.app.strategies.leap_option_strategy2 import get_qqq_gap_down_leap_signal
@@ -149,6 +149,7 @@ async def root():
                 "stage2": "/stage2_db",
                 "vcp": "/vcp_db",
                 "earnings_quality": "/earnings_quality_db",
+                "earnings_quality_status": "/earnings_quality_status",
                 "felix": "/felix_db",
                 "vibia_hybrid": "/vibia_hybrid_db",
                 "marios_swing": "/marios_swing_db",
@@ -464,6 +465,50 @@ def get_earnings_quality_db():
             "last_updated": format_last_updated(today, latest[0]),
             "stocks_analyzed": len(result),
             "results": result
+        }
+    finally:
+        session.close()
+
+
+@router.get("/earnings_quality_status", tags=["Earnings Quality"])
+def get_earnings_quality_status(limit: int = Query(30, ge=1, le=200)):
+    """
+    Heartbeat / audit log for the Earnings Quality task — one row per run.
+
+    Explains gaps in /earnings_quality_db. Each run records a status:
+    - 'saved':       analysis ran and results were written (see results_saved)
+    - 'no_earnings': FMP responded but no qualifying tickers in the window
+    - 'fmp_error':   the FMP calendar fetch failed (see detail) — NOT a real lull
+
+    If the most recent rows are all 'no_earnings', the gap is a genuine
+    earnings lull. Any 'fmp_error' means the fetch was broken and earnings
+    may have occurred without being analyzed.
+    """
+    session: Session = SessionLocal()
+    try:
+        rows = session.query(EarningsQualityRunLog).order_by(
+            EarningsQualityRunLog.run_date.desc(),
+            EarningsQualityRunLog.run_time.desc(),
+        ).limit(limit).all()
+
+        if not rows:
+            return {"error": "No Earnings Quality run-log data available", "runs": []}
+
+        latest = rows[0]
+        return {
+            "latest_status": latest.status,
+            "latest_run": format_last_updated(latest.run_date, latest.run_time),
+            "runs": [
+                {
+                    "date": str(r.run_date),
+                    "time": str(r.run_time),
+                    "status": r.status,
+                    "tickers_found": r.tickers_found,
+                    "results_saved": r.results_saved,
+                    "detail": r.detail,
+                }
+                for r in rows
+            ],
         }
     finally:
         session.close()

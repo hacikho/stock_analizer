@@ -222,6 +222,23 @@ class FelixData(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+# Heartbeat / audit log for the Earnings Quality task.
+# One row is written on EVERY run so a gap in earnings_quality_data can be
+# explained: 'saved' (results written), 'no_earnings' (FMP responded but no
+# qualifying tickers), or 'fmp_error' (calendar fetch failed). Without this,
+# all three outcomes look identical (no new rows).
+class EarningsQualityRunLog(Base):
+    __tablename__ = 'earnings_quality_run_log'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_date = Column(Date, nullable=False)
+    run_time = Column(Time, nullable=False)
+    status = Column(String, nullable=False)      # 'saved' | 'no_earnings' | 'fmp_error'
+    tickers_found = Column(Integer, nullable=False, default=0)
+    results_saved = Column(Integer, nullable=False, default=0)
+    detail = Column(Text, nullable=True)         # e.g. error message or date window
+    created_at = Column(DateTime, server_default=func.now())
+
+
 # Always use project root for data.db
 import os
 

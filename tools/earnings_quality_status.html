@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Earnings Quality — Run Status</title>
+<style>
+  :root {
+    --bg: #0f1220; --card: #181c2e; --line: #272c44; --txt: #e7e9f3;
+    --muted: #99a0c0; --saved: #2ecc71; --no: #f1c40f; --err: #e74c3c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--txt);
+    font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px; }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .bar { display: flex; gap: 8px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; }
+  input { background: var(--card); border: 1px solid var(--line); color: var(--txt);
+    padding: 8px 10px; border-radius: 8px; min-width: 320px; }
+  button { background: #3b4cca; color: #fff; border: 0; padding: 8px 14px;
+    border-radius: 8px; cursor: pointer; }
+  button:hover { background: #4a5be0; }
+  .hero { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 20px; margin-bottom: 18px; display: flex; align-items: center; gap: 16px; }
+  .dot { width: 16px; height: 16px; border-radius: 50%; flex: 0 0 auto; }
+  .badge { font-weight: 600; text-transform: uppercase; letter-spacing: .04em; font-size: 13px; }
+  .hero .meta { color: var(--muted); margin-left: auto; text-align: right; font-size: 13px; }
+  .verdict { margin: 6px 0 0; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; background: var(--card);
+    border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: 13px; }
+  th { color: var(--muted); font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+  .s-saved { color: var(--saved); } .s-no_earnings { color: var(--no); } .s-fmp_error { color: var(--err); }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .pill.s-saved { background: rgba(46,204,113,.15); }
+  .pill.s-no_earnings { background: rgba(241,196,15,.15); }
+  .pill.s-fmp_error { background: rgba(231,76,60,.15); }
+  .detail { color: var(--muted); font-size: 12px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .err { color: var(--err); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Earnings Quality — Run Status</h1>
+  <p class="sub">Heartbeat for the hourly earnings-quality task. Explains any gap in saved results.</p>
+
+  <div class="bar">
+    <input id="base" value="http://localhost:8000" spellcheck="false" />
+    <button id="go">Refresh</button>
+    <label style="color:var(--muted)"><input type="checkbox" id="auto" checked /> auto (60s)</label>
+  </div>
+
+  <div class="hero" id="hero" style="display:none">
+    <span class="dot" id="dot"></span>
+    <div>
+      <div class="badge" id="badge">—</div>
+      <div class="verdict" id="verdict"></div>
+    </div>
+    <div class="meta" id="meta"></div>
+  </div>
+
+  <div id="msg" class="sub"></div>
+
+  <table id="tbl" style="display:none">
+    <thead><tr><th>Date</th><th>Time</th><th>Status</th><th>Tickers</th><th>Saved</th><th>Detail</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+
+<script>
+  const COLORS = { saved: 'var(--saved)', no_earnings: 'var(--no)', fmp_error: 'var(--err)' };
+  const VERDICT = {
+    saved: 'Latest run analyzed earnings and saved results.',
+    no_earnings: 'FMP responded but no qualifying earnings in the window — a genuine lull.',
+    fmp_error: 'The FMP calendar fetch failed. Earnings may have occurred without being analyzed — check the detail.',
+  };
+  const $ = id => document.getElementById(id);
+  let timer = null;
+
+  async function load() {
+    const base = $('base').value.replace(/\/+$/, '');
+    $('msg').textContent = 'Loading…'; $('msg').className = 'sub';
+    try {
+      const res = await fetch(base + '/earnings_quality_status?limit=50', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      if (data.error || !data.runs || !data.runs.length) {
+        $('hero').style.display = 'none'; $('tbl').style.display = 'none';
+        $('msg').textContent = data.error || 'No run-log data yet.'; return;
+      }
+      const st = data.latest_status;
+      $('dot').style.background = COLORS[st] || 'var(--muted)';
+      $('badge').textContent = st; $('badge').className = 'badge s-' + st;
+      $('verdict').textContent = VERDICT[st] || '';
+      $('meta').textContent = 'Last run: ' + (data.latest_run || '—');
+      $('hero').style.display = 'flex';
+
+      $('rows').innerHTML = data.runs.map(r => `
+        <tr>
+          <td>${r.date}</td>
+          <td>${String(r.time).slice(0,8)}</td>
+          <td><span class="pill s-${r.status}">${r.status}</span></td>
+          <td>${r.tickers_found}</td>
+          <td>${r.results_saved}</td>
+          <td class="detail" title="${(r.detail||'').replace(/"/g,'&quot;')}">${r.detail || ''}</td>
+        </tr>`).join('');
+      $('tbl').style.display = 'table';
+      $('msg').textContent = '';
+    } catch (e) {
+      $('hero').style.display = 'none'; $('tbl').style.display = 'none';
+      $('msg').className = 'sub err';
+      $('msg').textContent = 'Could not reach API (' + e.message + '). Check the base URL, that the server is running, and CORS allows this page\'s origin.';
+    }
+  }
+
+  function setAuto() {
+    if (timer) { clearInterval(timer); timer = null; }
+    if ($('auto').checked) timer = setInterval(load, 60000);
+  }
+  $('go').onclick = load;
+  $('base').addEventListener('keydown', e => { if (e.key === 'Enter') load(); });
+  $('auto').onchange = setAuto;
+  load(); setAuto();
+</script>
+</body>
+</html>
