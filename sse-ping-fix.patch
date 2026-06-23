@@ -1,0 +1,40 @@
+diff --git a/aignitequant/app/api/routes.py b/aignitequant/app/api/routes.py
+index 9431688..2299591 100644
+--- a/aignitequant/app/api/routes.py
++++ b/aignitequant/app/api/routes.py
+@@ -73,17 +73,24 @@ async def _sse_event_generator():
+         yield ": connected\n\n"
+ 
+         while True:
+-            try:
+-                message = await asyncio.wait_for(
+-                    pubsub.get_message(ignore_subscribe_messages=True),
+-                    timeout=25.0,
+-                )
+-                if message and message["type"] == "message":
+-                    yield f"event: strategy_update\ndata: {message['data']}\n\n"
+-                else:
+-                    # Keepalive ping — browsers/proxies drop idle SSE after ~30 s
+-                    yield ": ping\n\n"
+-            except asyncio.TimeoutError:
++            # Block up to 25s waiting for a real pub/sub message. redis.asyncio's
++            # get_message(timeout=...) suspends the coroutine until a message
++            # arrives or the timeout elapses, so we emit at most ONE keepalive
++            # ping per 25s of idleness.
++            #
++            # The previous version passed the 25s timeout to asyncio.wait_for()
++            # while calling get_message() with its default timeout=0.0 (i.e.
++            # NON-BLOCKING). get_message() then returned None immediately, the
++            # loop fell straight into the keepalive branch, and ": ping" was
++            # streamed as fast as the client would accept it — ~MB/s per open
++            # connection. That hot loop was the dominant egress cost.
++            message = await pubsub.get_message(
++                ignore_subscribe_messages=True, timeout=25.0
++            )
++            if message and message["type"] == "message":
++                yield f"event: strategy_update\ndata: {message['data']}\n\n"
++            else:
++                # Keepalive ping — browsers/proxies drop idle SSE after ~30 s
+                 yield ": ping\n\n"
+     except asyncio.CancelledError:
+         pass
